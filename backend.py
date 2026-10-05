@@ -214,13 +214,15 @@ def tool_browse(args: dict):
         return json.dumps({"error": "give me a full link starting with http"})
     try:
         from playwright.sync_api import sync_playwright
+        prof = BASE / ".browser-profile"
+        prof.mkdir(exist_ok=True)
         with sync_playwright() as p:
-            b = p.chromium.launch(headless=True)
-            pg = b.new_page()
+            ctx = p.chromium.launch_persistent_context(str(prof), headless=True)
+            pg = ctx.new_page()
             pg.goto(url, timeout=25000, wait_until="domcontentloaded")
             title = pg.title()
             text = pg.inner_text("body")[:5000]
-            b.close()
+            ctx.close()
         if not text.strip():
             return json.dumps({"url": url, "title": title, "note": "page opened but no readable text found"})
         return json.dumps({"url": url, "title": title, "text": text}, ensure_ascii=False)

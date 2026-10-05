@@ -2,6 +2,7 @@
 .env
 memory.json
 uploads/
+.browser-profile/
 
 # junk
 __pycache__/
