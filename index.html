@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>010</title>
+<style>
+body{font-family:system-ui;margin:0;background:#0f1115;color:#eee;display:flex;flex-direction:column;height:100vh}
+header{padding:12px 16px;background:#171a21;border-bottom:1px solid #222;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#chat{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:85%;padding:10px 12px;border-radius:12px;white-space:pre-wrap;position:relative}
+.me{align-self:flex-end;background:#2b6cff}.bot{align-self:flex-start;background:#1e222c}
+.tools{margin-top:6px;display:flex;gap:8px;font-size:12px;opacity:.6}
+.tools span{cursor:pointer}.tools span:hover{opacity:1}
+.when{font-size:10px;opacity:.45;margin-top:4px}
+.typing i{display:inline-block;animation:blink 1s infinite}.typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,100%{opacity:.2}50%{opacity:1}}
+#bar{display:flex;gap:8px;padding:12px;background:#171a21}
+input,button{padding:10px;border-radius:8px;border:1px solid #333;background:#0f1115;color:#eee}
+#in{flex:1}button{cursor:pointer}
+small{color:#888}
+#login{position:fixed;inset:0;background:#0f1115;display:flex;align-items:center;justify-content:center;z-index:99}
+#login div{background:#171a21;padding:24px;border-radius:12px;display:flex;flex-direction:column;gap:10px;min-width:280px}
+</style></head><body>
+<div id="login" style="display:none"><div>
+<b>⚡ 010</b><small>Enter password</small>
+<input id="pw" type="password" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin()">
+<button onclick="doLogin()">Unlock</button>
+<small id="loginerr" style="color:#f66"></small>
+</div></div>
+<header><b>⚡ 010</b><small id="status">life manager</small><small id="model"></small>
+<span style="flex:1"></span>
+<button onclick="saveProfile()">Save profile</button>
+<button onclick="toggleVoice()">🎤 Voice</button>
+<button onclick="snap()">📷 Camera</button>
+<button onclick="openSettings()" title="Change brain: model + API key">⚙️ Brain</button>
+<button onclick="clearChat()" title="Delete all chat">🗑️ Clear</button>
+<button onclick="logout()" title="Lock">🔒 Lock</button>
+<input type="file" id="f" accept=".txt,.md,.csv,.json,.png,.jpg,.jpeg,.webp" onchange="stageFile()" title="Text files and images only"></header>
+<div id="settings" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:98;align-items:center;justify-content:center">
+<div style="background:#171a21;padding:20px;border-radius:12px;display:flex;flex-direction:column;gap:10px;width:min(420px,92vw);max-height:88vh;overflow:auto">
+<b>⚙️ Brain settings</b>
+<small>Using now: <b id="curmodel"></b> (<span id="curkey"></span>)</small>
+<label><small>Choose brain</small><br><select id="setmodel" onchange="showFeatures()" style="width:100%"></select></label>
+<label id="customwrap" style="display:none"><small>Custom model id (exact id from the provider)</small><br><input id="setcustom" style="width:100%" placeholder="e.g. deepseek/deepseek-chat:free"></label>
+<div id="feat" style="font-size:13px"></div>
+<label><small>Server address (auto-filled)</small><br><input id="seturl" style="width:100%"></label>
+<label><small>API key (leave blank to keep saved one)</small><br><input id="setkey" type="password" placeholder="paste new key here" style="width:100%"></label>
+<small id="keysrc"></small>
+<div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="saveSettings()">Save</button><button onclick="testSettings()">Test</button><button onclick="closeSettings()">Close</button></div>
+<small id="setmsg"></small>
+<hr style="border-color:#333;width:100%">
+<small><b>Move 010 to another device / cloud:</b></small>
+<div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="exportMem()">⬇️ Export memory</button><button onclick="document.getElementById('impfile').click()">⬆️ Import memory</button>
+<input type="file" id="impfile" accept=".json" style="display:none" onchange="importMem()"></div>
+</div></div>
+<div id="chat"></div>
+<div id="stage" style="display:none;gap:8px;padding:8px 12px;background:#171a21;border-top:1px solid #222;align-items:center"><span id="stagename"></span><button onclick="clearStaged()">✕</button></div>
+<div id="bar"><input id="in" placeholder="Talk to 010..." onkeydown="if(event.key==='Enter')send()">
+<button onclick="send()">Send</button>
+<button onclick="speakLast()">🔊 Speak</button></div>
+<video id="cam" style="display:none" autoplay playsinline width="320"></video>
+<canvas id="cv" style="display:none"></canvas>
+<script>
+let lastReply="", listening=false, recog=null, img=null;
+const pw = () => localStorage.getItem('lm_pw') || '';
+function headers(j=true){ const h={}; if(j) h['Content-Type']='application/json'; if(pw()) h['x-app-password']=pw(); return h; }
+async function api(path, opts={}){
+  opts.headers = Object.assign(headers(!opts.body || typeof opts.body==='string'), opts.headers||{});
+  const r = await fetch(path, opts);
+  if(r.status===401){ document.getElementById('login').style.display='flex'; throw new Error('locked'); }
+  return r;
+}
+function doLogin(){ const v=document.getElementById('pw').value; localStorage.setItem('lm_pw', v); document.getElementById('login').style.display='none'; loadHistory(); }
+function logout(){ localStorage.removeItem('lm_pw'); location.reload(); }
+function fmtTime(at){ if(!at)return ''; try{ const d=new Date(at); return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); }catch(e){ return ''; } }
+function bubble(id, who, text, at){
+  const d=document.createElement('div'); d.className='msg '+who; d.id='m-'+id;
+  const t=document.createElement('div'); t.textContent=text; d.appendChild(t);
+  const w=fmtTime(at); if(w){ const s=document.createElement('div'); s.className='when'; s.textContent=w; d.appendChild(s); }
+  const tools=document.createElement('div'); tools.className='tools';
+  tools.innerHTML='<span title="Edit">✏️ edit</span><span title="Delete">🗑️ delete</span>';
+  tools.children[0].onclick=()=>editMsg(id, text);
+  tools.children[1].onclick=()=>delMsg(id);
+  d.appendChild(tools);
+  document.getElementById('chat').appendChild(d);
+  d.scrollIntoView();
+}
+let allMsgs=[];
+async function loadHistory(){
+  try{
+    const r=await api('/api/history'); const j=await r.json();
+    allMsgs=j.conversations||[];
+    document.getElementById('chat').innerHTML='';
+    if(!allMsgs.length){
+      bubble('welcome','bot',"Yo, I'm 010. I remember everything you tell me. Give me your name + your #1 goal + what's blocking you.");
+      return;
+    }
+    renderMsgs(50);
+    if(j.profile && j.profile.name) document.getElementById('status').textContent='chat + memory ('+j.profile.name+')';
+  }catch(e){ if(e.message!=='locked') bubble('err','bot','⚠️ Cannot load: '+e.message); }
+}
+function addBot(text, at){
+  // 010 double-texts: /// splits one reply into consecutive bubbles
+  String(text||'').split('///').map(s=>s.trim()).filter(Boolean)
+    .forEach((p,i)=>bubble('b'+Date.now()+i,'bot',p,at));
+}
+function renderMsgs(n){
+  const box=document.getElementById('chat'); box.innerHTML='';
+  const shown=allMsgs.slice(-n);
+  if(allMsgs.length>n){
+    const b=document.createElement('button'); b.textContent='Show older ('+(allMsgs.length-n)+' more)';
+    b.onclick=()=>renderMsgs(n+100); box.appendChild(b);
+  }
+  shown.forEach(c=>{
+    if(c.role==='user'){ bubble(c.id||Math.random(),'me',c.content,c.at); }
+    else { String(c.content||'').split('///').map(s=>s.trim()).filter(Boolean)
+      .forEach(p=>bubble(c.id||Math.random(),'bot',p,c.at)); }
+  });
+}
+let staged=null; // {kind:'image',dataUrl,file?} or {kind:'file',file}
+function stageChip(t){ document.getElementById('stagename').textContent=t; document.getElementById('stage').style.display='flex'; }
+function clearStaged(){ staged=null; img=null; document.getElementById('f').value=''; document.getElementById('stage').style.display='none'; }
+async function stageFile(){
+  const f=document.getElementById('f').files[0]; if(!f)return;
+  const ok=/\.(txt|md|csv|json|png|jpg|jpeg|webp)$/i.test(f.name);
+  if(!ok){ bubble('f'+Date.now(),'bot','⚠️ That file type is not supported yet. I can read text files (.txt, .md, .csv, .json) and see images (.png, .jpg, .webp).'); document.getElementById('f').value=''; return; }
+  if(/\.(png|jpg|jpeg|webp)$/i.test(f.name)){
+    const rd=new FileReader();
+    rd.onload=()=>{ staged={kind:'image',dataUrl:rd.result,file:f}; img=rd.result; stageChip('📎 '+f.name+' — write a message and Send'); };
+    rd.readAsDataURL(f);
+  } else { staged={kind:'file',file:f}; stageChip('📎 '+f.name+' — write a message and Send'); }
+}
+async function send(){
+  const t=document.getElementById('in').value.trim();
+  if(!t&&!staged&&!img)return;
+  document.getElementById('in').value='';
+  const tp=document.createElement('div'); tp.className='msg bot typing'; tp.id='typing'; tp.innerHTML='<i>●</i> <i>●</i> <i>●</i>';
+  document.getElementById('chat').appendChild(tp); tp.scrollIntoView();
+  try{
+    let msg=t, b64=img;
+    if(staged&&staged.kind==='image'){
+      b64=staged.dataUrl;
+      if(staged.file){
+        const fd=new FormData(); fd.append('file',staged.file);
+        await api('/api/upload',{method:'POST',body:fd,headers:pw()?{'x-app-password':pw()}:{}}).catch(()=>{});
+      }
+    }
+    if(staged&&staged.kind==='file'){
+      const fd=new FormData(); fd.append('file',staged.file);
+      const r=await api('/api/upload',{method:'POST',body:fd,headers:pw()?{'x-app-password':pw()}:{}});
+      const j=await r.json();
+      if(j.error){ bubble('e'+Date.now(),'bot','⚠️ '+j.error); return; }
+      msg=(t?t+'\n\n':'')+'[Attached file '+staged.file.name+']\n'+(j.extract||'saved');
+    }
+    const r2=await api('/api/chat',{method:'POST',body:JSON.stringify({message:msg,image_b64:b64})});
+    const j2=await r2.json(); clearStaged();
+    document.getElementById('typing').remove();
+    if(j2.error){ bubble('e'+Date.now(),'bot','⚠️ '+j2.error); return; }
+    lastReply=(j2.reply||'').replaceAll('///',' ');
+    addBot(j2.reply);
+    await loadHistory();
+    if(j2.learned){ bubble('l'+Date.now(),'bot','✅ '+j2.learned); }
+  }catch(e){ document.getElementById('typing')?.remove(); if(e.message!=='locked') alert('Send failed: '+e.message); }
+}
+async function editMsg(id, old){
+  const v=prompt('Edit message:', old); if(v===null||v===old)return;
+  await api('/api/message/'+id,{method:'PUT',body:JSON.stringify({content:v})});
+  loadHistory();
+}
+let CAT=[];
+async function refreshModelLabel(){ try{ const r=await api('/api/settings'); const j=await r.json(); document.getElementById('model').textContent='🧠 '+j.model; }catch(e){} }
+async function openSettings(){
+  const r=await api('/api/settings'); const j=await r.json(); CAT=j.catalog;
+  document.getElementById('curmodel').textContent=j.model;
+  document.getElementById('curkey').textContent='key '+j.key_preview;
+  const s=document.getElementById('setmodel'); s.innerHTML='';
+  CAT.forEach(e=>{ const o=document.createElement('option'); o.value=e.id; o.textContent=e.label+((e.env_key&&!e.has_key)?' (needs key)':''); if(e.id===j.model)o.selected=true; s.appendChild(o); });
+  const oc=document.createElement('option'); oc.value='__custom'; oc.textContent='✏️ Custom model id...'; s.appendChild(oc);
+  if(!CAT.some(e=>e.id===j.model)){ s.value='__custom'; document.getElementById('setcustom').value=j.model; }
+  document.getElementById('seturl').value=j.base_url;
+  document.getElementById('setkey').value='';
+  document.getElementById('setmsg').textContent='';
+  showFeatures();
+  document.getElementById('settings').style.display='flex';
+}
+function showFeatures(){
+  const v=document.getElementById('setmodel').value;
+  document.getElementById('customwrap').style.display=(v==='__custom')?'block':'none';
+  if(v==='__custom'){ document.getElementById('feat').innerHTML='Type the exact model id. Keep the right server address below, paste the key, then Test.'; document.getElementById('keysrc').textContent=''; return; }
+  const e=CAT.find(x=>x.id===v); if(!e)return;
+  document.getElementById('seturl').value=e.base_url;
+  document.getElementById('feat').innerHTML='✅ '+e.features.join('<br>✅ ')+(e.limits?'<br>⛽ <b>Limits:</b> '+e.limits:'');
+  document.getElementById('keysrc').textContent=e.key_from?('Get key: '+e.key_from):'No key needed.';
+}
+async function saveSettings(){
+  let m=document.getElementById('setmodel').value;
+  if(m==='__custom'){ m=document.getElementById('setcustom').value.trim(); if(!m){ document.getElementById('setmsg').textContent='⚠️ Type a custom model id first.'; return; } }
+  const body={model:m, base_url:document.getElementById('seturl').value};
+  const k=document.getElementById('setkey').value.trim(); if(k)body.api_key=k;
+  const r=await api('/api/settings',{method:'POST',body:JSON.stringify(body)}); const j=await r.json();
+  document.getElementById('setmsg').textContent=j.error?('⚠️ '+j.error):('✅ Now using '+j.model+' ('+j.key_preview+')');
+  if(!j.error){ document.getElementById('curmodel').textContent=j.model; document.getElementById('curkey').textContent='key '+j.key_preview; refreshModelLabel(); }
+}
+async function testSettings(){
+  document.getElementById('setmsg').textContent='Testing...';
+  const r=await api('/api/ping'); const j=await r.json();
+  document.getElementById('setmsg').textContent=j.ok?('✅ '+j.model+' replied: '+j.reply):('⚠️ '+(j.error||'failed'));
+}
+function closeSettings(){ document.getElementById('settings').style.display='none'; }
+async function exportMem(){
+  const r=await api('/api/export'); const b=await r.blob();
+  const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='010-memory.json'; a.click();
+  document.getElementById('setmsg').textContent='✅ Memory downloaded. Import it on the new device.';
+}
+async function importMem(){
+  const f=document.getElementById('impfile').files[0]; if(!f)return;
+  const fd=new FormData(); fd.append('file',f);
+  const r=await api('/api/import',{method:'POST',body:fd,headers:pw()?{'x-app-password':pw()}:{}});
+  const j=await r.json();
+  document.getElementById('setmsg').textContent=j.error?('⚠️ '+j.error):('✅ Imported '+j.messages+' messages, '+j.facts+' facts.');
+  document.getElementById('impfile').value='';
+  loadHistory();
+}
+async function delMsg(id){ if(!confirm('Delete this message?'))return; await api('/api/message/'+id,{method:'DELETE'}); loadHistory(); }
+async function clearChat(){ if(!confirm('Delete ALL chat history? Memory facts stay.'))return; await api('/api/clear',{method:'POST'}); loadHistory(); }
+async function saveProfile(){
+  const name=prompt('Your name?'); const goals=prompt('Your #1 goal?');
+  await api('/api/profile',{method:'POST',body:JSON.stringify({name,goals:goals?[goals]:[]})});
+  bubble('p'+Date.now(),'bot','✅ Profile saved.'); loadHistory();
+}
+function toggleVoice(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR){alert('Voice input needs Chrome.');return;}
+  if(listening){recog.stop();listening=false;return;}
+  recog=new SR(); recog.lang='en-US'; listening=true;
+  recog.onresult=e=>{document.getElementById('in').value=e.results[0][0].transcript; send();};
+  recog.onend=()=>listening=false; recog.start();
+}
+function speakLast(){ if(!lastReply)return; speechSynthesis.speak(new SpeechSynthesisUtterance(lastReply.slice(0,300))); }
+async function snap(){
+  const v=document.getElementById('cam'); v.style.display='block';
+  const s=await navigator.mediaDevices.getUserMedia({video:true}); v.srcObject=s;
+  setTimeout(()=>{
+    const c=document.getElementById('cv'); c.width=v.videoWidth; c.height=v.videoHeight;
+    c.getContext('2d').drawImage(v,0,0);
+    const shot=c.toDataURL('image/jpeg',0.8);
+    staged={kind:'image',dataUrl:shot,file:null}; img=shot;
+    s.getTracks().forEach(t=>t.stop()); v.style.display='none';
+    stageChip('📷 Captured — write a message and Send.');
+  },2500);
+}
+loadHistory();
+refreshModelLabel();
+</script></body></html>

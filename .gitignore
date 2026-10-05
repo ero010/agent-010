@@ -1,0 +1,9 @@
+# secrets — never push these
+.env
+memory.json
+uploads/
+
+# junk
+__pycache__/
+*.log
+*.exe
