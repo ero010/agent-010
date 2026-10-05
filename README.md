@@ -1,5 +1,5 @@
 ---
 title: Agent 010
-sdk: docker
+sdk: gradio
 app_port: 7860
 ---
