@@ -53,6 +53,7 @@ small{color:#888}
 </div></div>
 <div id="chat"></div>
 <div id="nudges" style="display:none;flex-direction:column;gap:8px;padding:8px 12px;background:#171a21;border-top:1px solid #222"></div>
+<div id="pc" style="display:none;flex-direction:column;gap:8px;padding:8px 12px;background:#171a21;border-top:1px solid #444"></div>
 <div id="stage" style="display:none;gap:8px;padding:8px 12px;background:#171a21;border-top:1px solid #222;align-items:center"><span id="stagename"></span><button onclick="clearStaged()">✕</button></div>
 <div id="bar"><input id="in" placeholder="Talk to 010..." onkeydown="if(event.key==='Enter')send()">
 <button onclick="send()">Send</button>
@@ -237,6 +238,37 @@ function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;'
 async function nudgeDone(id){ await api('/api/nudge/done',{method:'POST',body:JSON.stringify({id})}); loadNudges(); }
 async function nudgeSnooze(id,m){ await api('/api/nudge/snooze',{method:'POST',body:JSON.stringify({id,minutes:m})}); loadNudges(); }
 async function nudgeDel(id){ await api('/api/nudge/'+id,{method:'DELETE'}); loadNudges(); }
+async function loadPc(){
+  try{
+    const r=await api('/api/pc/pending'); const j=await r.json();
+    const box=document.getElementById('pc'); box.innerHTML='';
+    if(!j.local || !(j.pending||[]).length){ box.style.display='none'; return; }
+    box.style.display='flex';
+    j.pending.forEach(p=>{
+      const d=document.createElement('div');
+      d.style.cssText='background:#2a2118;border:1px solid #a80;padding:8px 10px;border-radius:10px;font-size:14px';
+      const what=p.action==='open'?'🖥️ Open <b>'+escapeHtml(p.target)+'</b>'
+        :p.action==='run'?'⌨️ Run <b>'+escapeHtml((p.command||'').slice(0,200))+'</b>'
+        :'📝 Write <b>'+escapeHtml(p.path||'')+'</b>';
+      d.innerHTML=what+'<br><small>010 wants to do this on your laptop:</small><br>';
+      d.appendChild(nbtn('✅ Approve',()=>pcDecide(p.id,true,what)));
+      d.appendChild(nbtn('❌ Deny',()=>pcDecide(p.id,false,what)));
+      box.appendChild(d);
+    });
+  }catch(e){}
+}
+async function pcDecide(id, ok, what){
+  const r=await api('/api/pc/decide',{method:'POST',body:JSON.stringify({id,approve:ok})});
+  const j=await r.json(); loadPc();
+  if(!ok){ bubble('d'+Date.now(),'bot','Okay, skipped it.'); return; }
+  if(j.error){ bubble('e'+Date.now(),'bot','⚠️ '+j.error); return; }
+  bubble('r'+Date.now(),'bot','✅ '+j.summary+'\n'+String(j.result||'').slice(0,500));
+  try{
+    const r2=await api('/api/chat',{method:'POST',body:JSON.stringify({message:'System note, do not act on tools: my PC action "'+j.summary+'" finished with result: '+String(j.result||'').slice(0,800)+'. React in one short line.'})});
+    const j2=await r2.json(); lastReply=(j2.reply||'').replaceAll('///',' ');
+    await loadHistory(); loadNudges();
+  }catch(e){}
+}
 async function exportMem(){
   const r=await api('/api/export'); const b=await r.blob();
   const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='010-memory.json'; a.click();
@@ -282,5 +314,7 @@ async function snap(){
 loadHistory();
 refreshModelLabel();
 loadNudges();
+loadPc();
 setInterval(loadNudges, 60000);
+setInterval(loadPc, 5000);
 </script></body></html>

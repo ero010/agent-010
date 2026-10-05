@@ -239,6 +239,123 @@ def tool_save_insight(args: dict):
     return json.dumps({"saved": True})
 
 TOOL_HANDLERS["save_insight"] = tool_save_insight
+
+LOCAL_PC = os.getenv("LOCAL_PC", "") == "1"
+PC_PENDING = {}
+PC_BLOCK = ("format ", "diskpart", "bcdedit", "reg delete", "cipher /w", "mkfs", "rm -rf /",
+            "del /f /s /q c:\\windows", "rd /s /q c:\\windows")
+
+def pc_guard(action: str, arg: str):
+    if not LOCAL_PC:
+        return "PC control only works on 010 running on the user's own laptop, not here."
+    low = (action + " " + arg).lower()
+    if any(b in low for b in PC_BLOCK):
+        return "refused: destructive action, never allowed"
+    return ""
+
+def tool_pc_open(args: dict):
+    g = pc_guard("open", args.get("target", ""))
+    if g:
+        return json.dumps({"error": g})
+    target = (args.get("target") or "").strip()[:500]
+    if not target:
+        return json.dumps({"error": "nothing to open"})
+    aid = uuid.uuid4().hex[:8]
+    PC_PENDING[aid] = {"action": "open", "target": target, "at": datetime.now().isoformat()}
+    return json.dumps({"pending_id": aid, "note": "Ask the user to tap Approve. It runs on their laptop."})
+
+def tool_pc_run(args: dict):
+    g = pc_guard("run", args.get("command", ""))
+    if g:
+        return json.dumps({"error": g})
+    cmd = (args.get("command") or "").strip()[:2000]
+    if not cmd:
+        return json.dumps({"error": "empty command"})
+    aid = uuid.uuid4().hex[:8]
+    PC_PENDING[aid] = {"action": "run", "command": cmd, "at": datetime.now().isoformat()}
+    return json.dumps({"pending_id": aid, "command": cmd,
+                       "note": "Shell commands need the user's approval. Ask them to tap Approve."})
+
+def tool_pc_file(args: dict):
+    g = pc_guard("file", args.get("path", ""))
+    if g:
+        return json.dumps({"error": g})
+    op, path = (args.get("op") or "list").lower(), (args.get("path") or "").strip()[:500]
+    if not path:
+        return json.dumps({"error": "no path given"})
+    p = Path(os.path.expandvars(os.path.expanduser(path)))
+    low = str(p).lower()
+    if low.startswith(("c:\\windows", "c:\\program files", "c:\\program files (x86)")):
+        return json.dumps({"error": "system folders are off-limits"})
+    try:
+        if op == "list":
+            if not p.is_dir():
+                return json.dumps({"error": "not a folder"})
+            return json.dumps({"path": str(p), "items": sorted(os.listdir(p))[:200]})
+        if op == "read":
+            data = p.read_bytes()
+            return json.dumps({"path": str(p), "text": data[:20000].decode("utf-8", errors="ignore")})
+        if op == "write":
+            if str(p).lower().startswith(str((BASE / "workspace").lower())):
+                (BASE / "workspace").mkdir(exist_ok=True)
+                p.write_text(args.get("content", ""), encoding="utf-8")
+                return json.dumps({"ok": True, "path": str(p)})
+            aid = uuid.uuid4().hex[:8]
+            PC_PENDING[aid] = {"action": "write", "path": str(p),
+                               "content": args.get("content", "")[:20000],
+                               "at": datetime.now().isoformat()}
+            return json.dumps({"pending_id": aid, "note": "Writing outside 010's folder needs approval. Ask them to tap Approve."})
+        return json.dumps({"error": "op must be list, read or write"})
+    except Exception as e:
+        return json.dumps({"error": str(e)[:300]})
+
+def tool_pc_screenshot(args: dict):
+    g = pc_guard("screenshot", "")
+    if g:
+        return json.dumps({"error": g})
+    try:
+        from PIL import ImageGrab
+        shot = ImageGrab.grab()
+        updir = DATA_DIR / "uploads"
+        updir.mkdir(exist_ok=True)
+        name = datetime.now().strftime("%Y%m%d-%H%M%S-shot.png")
+        shot.save(updir / name)
+        m = load_mem()
+        m["facts"].append({"type": "image", "name": name, "saved_as": name,
+                           "at": datetime.now().isoformat(), "note": "PC screenshot"})
+        save_mem(m)
+        return json.dumps({"ok": True, "saved_as": name,
+                           "note": "Screenshot saved. Tell the user they can view it; describe you can't see it with this brain."})
+    except Exception as e:
+        return json.dumps({"error": "screenshot failed (needs Pillow: pip install pillow): " + str(e)[:200]})
+
+PC_TOOLS = [
+    {"type": "function", "function": {
+        "name": "pc_open",
+        "description": "Open something on the user's laptop: an app name (notepad, calculator, chrome), a URL, or a file/folder path. Runs after their approval.",
+        "parameters": {"type": "object", "properties": {
+            "target": {"type": "string", "description": "app name, URL or path"}}, "required": ["target"]}}},
+    {"type": "function", "function": {
+        "name": "pc_run",
+        "description": "Run a PowerShell command on the user's laptop. ALWAYS needs their approval first — tell them to tap Approve, then report the result.",
+        "parameters": {"type": "object", "properties": {
+            "command": {"type": "string", "description": "PowerShell command"}}, "required": ["command"]}}},
+    {"type": "function", "function": {
+        "name": "pc_file",
+        "description": "Files on the laptop. op=list/read are instant (no system folders). op=write outside 010's workspace folder needs approval.",
+        "parameters": {"type": "object", "properties": {
+            "op": {"type": "string", "description": "list, read or write"},
+            "path": {"type": "string", "description": "folder or file path"},
+            "content": {"type": "string", "description": "text for op=write"}}, "required": ["op", "path"]}}},
+    {"type": "function", "function": {
+        "name": "pc_screenshot",
+        "description": "Take a screenshot of the laptop screen and save it. You cannot see it with text-only brains — tell the user it's saved for them.",
+        "parameters": {"type": "object", "properties": {}}}},
+]
+
+if LOCAL_PC:
+    TOOL_HANDLERS.update({"pc_open": tool_pc_open, "pc_run": tool_pc_run,
+                           "pc_file": tool_pc_file, "pc_screenshot": tool_pc_screenshot})
 TOOLS = [
     {"type": "function", "function": {
         "name": "web_search",
@@ -260,6 +377,9 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "text": {"type": "string", "description": "the interesting find, one or two sentences"}}, "required": ["text"]}}},
 ]
+
+if LOCAL_PC:
+    TOOLS.extend(PC_TOOLS)
 
 import re as _re
 
@@ -405,6 +525,7 @@ Help user fix their life and achieve goals. Be present: if something is due, che
 Below you get the FULL conversation history plus MEMORY. Read the user's new message,
 then read ALL past messages for context, then answer using everything you know.
 You have live tools: web_search (current facts), browse_page (open links in Chrome), get_datetime (exact time) and save_insight (stash an interesting find to tell them later). Use them instead of guessing.
+{"PC: you can act on the user's laptop with pc_open, pc_file and pc_screenshot (instant), pc_run and outside writes (need their Approve tap — always tell them to tap it). When they ask you to open/run/do something, CALL the tool immediately instead of asking for confirmation — approval happens via their Approve button. Paths: use %USERPROFILE% for home (e.g. %USERPROFILE%/Documents)." if LOCAL_PC else ""}
 MEMORY: {mem_text}{nudge_text}
 Rules:
 1. If user shares a durable fact (name, goal, habit, preference), acknowledge it briefly and it will be auto-saved.
@@ -620,6 +741,61 @@ def nudge_del(nid: str, req: Request):
     m["reminders"] = [r for r in m.get("reminders", []) if r.get("id") != nid]
     save_mem(m)
     return {"ok": True}
+
+@app.get("/api/pc/pending")
+def pc_pending(req: Request):
+    if not need_auth(req):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if not LOCAL_PC:
+        return {"pending": [], "local": False}
+    now = datetime.now()
+    dead = [k for k, v in PC_PENDING.items()
+            if (now - datetime.fromisoformat(v["at"])).total_seconds() > 600]
+    for k in dead:
+        PC_PENDING.pop(k, None)
+    items = [{"id": k, **{kk: vv for kk, vv in v.items() if kk != "content"},
+              "has_content": "content" in v} for k, v in PC_PENDING.items()]
+    return {"pending": items, "local": True}
+
+class PcDecide(BaseModel):
+    id: str
+    approve: bool
+
+def pc_execute(p: dict):
+    import subprocess
+    a = p["action"]
+    if a == "open":
+        t = p["target"]
+        if t.startswith(("http://", "https://")) or os.path.exists(t):
+            os.startfile(t)
+        else:
+            subprocess.Popen(["powershell", "-NoProfile", "-Command", "Start-Process", t])
+        return "opened " + t
+    if a == "run":
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", p["command"]],
+                           capture_output=True, text=True, timeout=60)
+        out = (r.stdout or "") + (("\nSTDERR:\n" + r.stderr) if r.stderr else "")
+        return f"exit {r.returncode}\n" + out[:4000]
+    if a == "write":
+        Path(p["path"]).write_text(p.get("content", ""), encoding="utf-8")
+        return "written to " + p["path"]
+    return "unknown action"
+
+@app.post("/api/pc/decide")
+def pc_decide(inp: PcDecide, req: Request):
+    if not need_auth(req):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if not LOCAL_PC:
+        return JSONResponse({"error": "PC control only runs on the laptop"}, status_code=400)
+    p = PC_PENDING.pop(inp.id, None)
+    if not p:
+        return JSONResponse({"error": "action expired or not found"}, status_code=404)
+    if not inp.approve:
+        return {"ok": True, "denied": True}
+    try:
+        return {"ok": True, "result": pc_execute(p), "summary": p["action"] + ": " + p.get("target", p.get("command", p.get("path", "")))[:120]}
+    except Exception as e:
+        return JSONResponse({"error": "failed: " + str(e)[:300]}, status_code=500)
 
 @app.post("/api/clear")
 def clear_chat(req: Request):
