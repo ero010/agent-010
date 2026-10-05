@@ -52,6 +52,7 @@ small{color:#888}
 <input type="file" id="impfile" accept=".json" style="display:none" onchange="importMem()"></div>
 </div></div>
 <div id="chat"></div>
+<div id="nudges" style="display:none;flex-direction:column;gap:8px;padding:8px 12px;background:#171a21;border-top:1px solid #222"></div>
 <div id="stage" style="display:none;gap:8px;padding:8px 12px;background:#171a21;border-top:1px solid #222;align-items:center"><span id="stagename"></span><button onclick="clearStaged()">✕</button></div>
 <div id="bar"><input id="in" placeholder="Talk to 010..." onkeydown="if(event.key==='Enter')send()">
 <button onclick="send()">Send</button>
@@ -157,6 +158,7 @@ async function send(){
     lastReply=(j2.reply||'').replaceAll('///',' ');
     addBot(j2.reply);
     await loadHistory();
+    loadNudges();
     if(j2.learned){ bubble('l'+Date.now(),'bot','✅ '+j2.learned); }
   }catch(e){ document.getElementById('typing')?.remove(); if(e.message!=='locked') alert('Send failed: '+e.message); }
 }
@@ -205,6 +207,36 @@ async function testSettings(){
   document.getElementById('setmsg').textContent=j.ok?('✅ '+j.model+' replied: '+j.reply):('⚠️ '+(j.error||'failed'));
 }
 function closeSettings(){ document.getElementById('settings').style.display='none'; }
+async function loadNudges(){
+  try{
+    const r=await api('/api/nudges'); const j=await r.json();
+    const box=document.getElementById('nudges'); box.innerHTML='';
+    const items=[];
+    (j.due||[]).forEach(x=>items.push({kind:'due', ...x}));
+    (j.insights||[]).forEach(x=>items.push({kind:'insight', ...x}));
+    if(!items.length){ box.style.display='none'; return; }
+    box.style.display='flex';
+    items.forEach(x=>{
+      const d=document.createElement('div');
+      d.style.cssText='background:#1e222c;padding:8px 10px;border-radius:10px;font-size:14px';
+      if(x.kind==='due'){
+        d.innerHTML='⏰ <b>'+escapeHtml(x.text)+'</b> <small>— you locked in?</small><br>';
+        d.appendChild(nbtn('✅ Done',()=>nudgeDone(x.id)));
+        d.appendChild(nbtn('😴 30m',()=>nudgeSnooze(x.id,30)));
+        d.appendChild(nbtn('🗑️',()=>nudgeDel(x.id)));
+      } else {
+        d.innerHTML='💡 '+escapeHtml(x.text)+'<br>';
+        d.appendChild(nbtn('Got it',()=>nudgeDone(x.id)));
+      }
+      box.appendChild(d);
+    });
+  }catch(e){}
+}
+function nbtn(t,fn){ const b=document.createElement('button'); b.textContent=t; b.style.cssText='margin:4px 4px 0 0;padding:6px 10px'; b.onclick=fn; return b; }
+function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function nudgeDone(id){ await api('/api/nudge/done',{method:'POST',body:JSON.stringify({id})}); loadNudges(); }
+async function nudgeSnooze(id,m){ await api('/api/nudge/snooze',{method:'POST',body:JSON.stringify({id,minutes:m})}); loadNudges(); }
+async function nudgeDel(id){ await api('/api/nudge/'+id,{method:'DELETE'}); loadNudges(); }
 async function exportMem(){
   const r=await api('/api/export'); const b=await r.blob();
   const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='010-memory.json'; a.click();
@@ -249,4 +281,6 @@ async function snap(){
 }
 loadHistory();
 refreshModelLabel();
+loadNudges();
+setInterval(loadNudges, 60000);
 </script></body></html>

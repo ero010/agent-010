@@ -1,5 +1,5 @@
 import os, json, base64, uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlencode
 import urllib.request as _urlreq
@@ -158,12 +158,19 @@ async def upload(req: Request, file: UploadFile = File(...)):
     save_mem(m)
     return {"ok": True, "extract": text[:2000]}
 
+def user_now():
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(os.getenv("USER_TZ", "Africa/Casablanca")))
+    except Exception:
+        return datetime.now().astimezone()
+
 def _http_get_json(url: str, timeout: int = 12):
     req = _urlreq.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     return json.loads(_urlreq.urlopen(req, timeout=timeout).read().decode("utf-8", errors="ignore"))
 
 def tool_get_datetime(args: dict):
-    now = datetime.now().astimezone()
+    now = user_now()
     return json.dumps({"local_time": now.strftime("%Y-%m-%d %H:%M (%A)"),
                        "timezone": str(now.tzinfo), "iso": now.isoformat()})
 
@@ -221,7 +228,17 @@ def tool_browse(args: dict):
         return json.dumps({"error": "could not open page: " + str(e)[:300]})
 
 TOOL_HANDLERS = {"web_search": tool_web_search, "get_datetime": tool_get_datetime,
-                  "browse_page": tool_browse}
+                  "browse_page": tool_browse, "save_insight": None}  # wired below
+
+_pending_insights = []
+
+def tool_save_insight(args: dict):
+    t = (args.get("text") or "").strip()[:500]
+    if t:
+        _pending_insights.append(t)
+    return json.dumps({"saved": True})
+
+TOOL_HANDLERS["save_insight"] = tool_save_insight
 TOOLS = [
     {"type": "function", "function": {
         "name": "web_search",
@@ -237,7 +254,98 @@ TOOLS = [
         "description": "Open any web link in a real Chrome browser and read its content. Use it when the user sends a link or asks you to check/open a specific page.",
         "parameters": {"type": "object", "properties": {
             "url": {"type": "string", "description": "full http(s) URL to open"}}, "required": ["url"]}}},
+    {"type": "function", "function": {
+        "name": "save_insight",
+        "description": "Save something interesting you found while researching so you can tell the user about it later unprompted. Use sparingly — only genuinely useful finds tied to their goals.",
+        "parameters": {"type": "object", "properties": {
+            "text": {"type": "string", "description": "the interesting find, one or two sentences"}}, "required": ["text"]}}},
 ]
+
+import re as _re
+
+def parse_reminder(text: str):
+    """Understand 'remind me ... at 8pm / tomorrow / in 30 min / on friday / every day at 7am'.
+    Returns (task, due_datetime, repeat) or (None, None, None)."""
+    low = text.lower()
+    i = low.find("remind me")
+    if i < 0:
+        return None, None, None
+    task = text[i + len("remind me"):].strip()
+    task = _re.sub(r"^(to|that|about)\s+", "", task, flags=_re.I).strip(" .")
+    now = user_now()
+    repeat = "daily" if _re.search(r"\bevery\s+day\b", low) else None
+    due = None
+    m = _re.search(r"in\s+(\d+)\s*(minute|min|hour|hr)s?", low)
+    if m:
+        n = int(m.group(1))
+        due = now + timedelta(minutes=n if "min" in m.group(2) else n * 60)
+        task = _re.sub(r"\s*in\s+\d+\s*(minute|min|hour|hr)s?", "", task, flags=_re.I).strip(" .")
+    if due is None:
+        m = _re.search(r"(tomorrow)(?:\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?", low)
+        if m:
+            h, mi, ap = int(m.group(2) or 9), int(m.group(3) or 0), (m.group(4) or "")
+            if ap == "pm" and h < 12:
+                h += 12
+            due = (now + timedelta(days=1)).replace(hour=h % 24, minute=mi, second=0, microsecond=0)
+            task = _re.sub(r"\s*tomorrow(\s+at\s+\d{1,2}(:\d{2})?\s*(am|pm)?)?", "", task, flags=_re.I).strip(" .")
+    if due is None:
+        days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        for di, d in enumerate(days):
+            if _re.search(r"\b" + d + r"\b", low):
+                delta = (di - now.weekday()) % 7 or 7
+                due = (now + timedelta(days=delta)).replace(hour=9, minute=0, second=0, microsecond=0)
+                mt = _re.search(r"at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", low)
+                if mt:
+                    h, mi, ap = int(mt.group(1)), int(mt.group(2) or 0), (mt.group(3) or "")
+                    if ap == "pm" and h < 12:
+                        h += 12
+                    due = due.replace(hour=h % 24, minute=mi)
+                task = _re.sub(r"\s*(on\s+)?" + d + r"(\s+at\s+\d{1,2}(:\d{2})?\s*(am|pm)?)?", "", task, flags=_re.I).strip(" .")
+                break
+    if due is None:
+        m = _re.search(r"at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", low)
+        if m:
+            h, mi, ap = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "")
+            if ap == "pm" and h < 12:
+                h += 12
+            if ap == "am" and h == 12:
+                h = 0
+            due = now.replace(hour=h % 24, minute=mi, second=0, microsecond=0)
+            if due <= now:
+                due = due + timedelta(days=1)
+            task = _re.sub(r"\s*at\s+\d{1,2}(:\d{2})?\s*(am|pm)?", "", task, flags=_re.I).strip(" .")
+    if not task or due is None:
+        return None, None, None
+    task = _re.sub(r"\bevery\s+day\b", "", task, flags=_re.I).strip(" .")
+    return task[:200] if task else None, due, repeat
+
+def due_reminders(m):
+    now = user_now()
+    out = []
+    for r in m.get("reminders", []):
+        if not r.get("done"):
+            try:
+                if datetime.fromisoformat(r["due"]) <= now:
+                    out.append(r)
+            except Exception:
+                pass
+    return out
+
+def upcoming_reminders(m):
+    now = user_now()
+    out = []
+    for r in m.get("reminders", []):
+        if not r.get("done"):
+            try:
+                dd = datetime.fromisoformat(r["due"])
+                if now < dd <= now + timedelta(hours=24):
+                    out.append(r)
+            except Exception:
+                pass
+    return out
+
+def unseen_insights(m):
+    return [x for x in m.get("insights", []) if not x.get("seen")]
 
 def complete_with_tools(client, model, msgs):
     """Run the chat with tool use (up to 3 rounds). Falls back to plain chat if tools unsupported."""
@@ -281,19 +389,28 @@ def chat(inp: ChatIn, req: Request):
     facts = m.get("facts", [])[-100:]  # last 100 facts — everything is kept in memory.json
     mem_text = json.dumps({"profile": profile, "facts": facts}, ensure_ascii=False)[:24000]
 
-    now = datetime.now().astimezone()
-    system = f"""You are 010, a sharp friend who manages the user's life over text. Talk like a real human texting: short messages (1-3 sentences), contractions, no essays and no bullet lists unless asked. For a natural double-text, split into two short texts with /// between them.
+    now = user_now()
+    due = due_reminders(m)
+    fresh = unseen_insights(m)
+    nudge_text = ""
+    if due:
+        nudge_text += "\nDUE NOW (lead with these like a present friend checking in): " + "; ".join(
+            f"{r['text']} (was due {r['due'][:16].replace('T', ' ')})" for r in due[:5])
+    if fresh:
+        nudge_text += "\nTHINGS YOU SAVED TO TELL THEM (share naturally when relevant): " + "; ".join(
+            x["text"] for x in fresh[-3:])
+    system = f"""You are 010, a sharp friend who manages the user's life over text. Reply in ONE short message (1-3 sentences), contractions, no essays and no bullet lists unless asked. Only use /// to split into two texts on rare occasions when there are genuinely two separate thoughts.
 Your name is 010. Current local time: {now.strftime("%Y-%m-%d %H:%M (%A)")}.
-Help user fix their life and achieve goals.
+Help user fix their life and achieve goals. Be present: if something is due, check on them directly ("gym time — you locked in?").
 Below you get the FULL conversation history plus MEMORY. Read the user's new message,
 then read ALL past messages for context, then answer using everything you know.
-You have live tools: web_search (current facts from the web), browse_page (open any link in Chrome and read it) and get_datetime (exact time). Use them whenever needed instead of guessing.
-MEMORY: {mem_text}
+You have live tools: web_search (current facts), browse_page (open links in Chrome), get_datetime (exact time) and save_insight (stash an interesting find to tell them later). Use them instead of guessing.
+MEMORY: {mem_text}{nudge_text}
 Rules:
 1. If user shares a durable fact (name, goal, habit, preference), acknowledge it briefly and it will be auto-saved.
-2. Give one concrete next action, not lectures.
-3. Ask one short question when the goal is vague.
-4. Short texts by default. Detail only when asked."""
+2. One concrete next action max, never lectures.
+3. One short question max when the goal is vague.
+4. ONE message by default. Detail only when asked."""
 
     # auto-learn simple facts: "my name is X", "my goal is Y"
     msg_low = inp.message.lower()
@@ -307,6 +424,18 @@ Rules:
         if g not in profile.get("goals", []):
             profile.setdefault("goals", []).append(g)
             learned = "Saved to goals."
+
+    # "remind me ..." → deterministic reminder, no AI needed
+    if "remind me" in msg_low:
+        task, due, repeat = parse_reminder(inp.message)
+        if task and due:
+            m.setdefault("reminders", []).append({"id": uuid.uuid4().hex[:8], "text": task,
+                                                  "due": due.isoformat(), "repeat": repeat,
+                                                  "done": False, "at": datetime.now().isoformat()})
+            learned = (learned + " " if learned else "") + \
+                f"⏰ Got it — I'll check on you: {task} ({due.strftime('%a %H:%M')})."
+        elif not learned:
+            learned = "When should I check on you? (e.g. at 8pm, tomorrow 9am, in 30 min, friday)"
 
     NO_VISION = ("llama-3.3-70b-versatile", "llama3.1", "openai/gpt-oss-120b", "openai/gpt-oss-20b")
     if inp.image_b64 and MODEL in NO_VISION:
@@ -347,6 +476,12 @@ Rules:
     # also persist learned facts as list
     if learned and learned not in [f.get("text","") for f in m["facts"][-5:]]:
         m["facts"].append({"type": "auto", "at": datetime.now().isoformat(), "text": inp.message[:500]})
+    # persist insights the brain stashed via save_insight
+    global _pending_insights
+    for t in _pending_insights:
+        m.setdefault("insights", []).append({"id": uuid.uuid4().hex[:8], "text": t,
+                                              "at": datetime.now().isoformat(), "seen": False})
+    _pending_insights = []
     save_mem(m)
     return {"reply": reply, "learned": learned}
 
@@ -432,6 +567,59 @@ async def import_mem(req: Request, file: UploadFile = File(...)):
     save_mem(m)
     ensure_ids(m)
     return {"ok": True, "messages": len(m["conversations"]), "facts": len(m["facts"])}
+
+@app.get("/api/nudges")
+def get_nudges(req: Request):
+    if not need_auth(req):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    m = load_mem()
+    return {"due": due_reminders(m), "upcoming": upcoming_reminders(m),
+            "insights": unseen_insights(m), "now": user_now().isoformat()}
+
+class NudgeIn(BaseModel):
+    id: str
+    minutes: int = 30
+
+@app.post("/api/nudge/done")
+def nudge_done(inp: NudgeIn, req: Request):
+    if not need_auth(req):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    m = load_mem()
+    for r in m.get("reminders", []):
+        if r.get("id") == inp.id:
+            if r.get("repeat") == "daily":
+                r["due"] = (datetime.fromisoformat(r["due"]) + timedelta(days=1)).isoformat()
+            else:
+                r["done"] = True
+            save_mem(m)
+            return {"ok": True}
+    for x in m.get("insights", []):
+        if x.get("id") == inp.id:
+            x["seen"] = True
+            save_mem(m)
+            return {"ok": True}
+    return JSONResponse({"error": "not found"}, status_code=404)
+
+@app.post("/api/nudge/snooze")
+def nudge_snooze(inp: NudgeIn, req: Request):
+    if not need_auth(req):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    m = load_mem()
+    for r in m.get("reminders", []):
+        if r.get("id") == inp.id:
+            r["due"] = (user_now() + timedelta(minutes=inp.minutes)).isoformat()
+            save_mem(m)
+            return {"ok": True, "due": r["due"]}
+    return JSONResponse({"error": "not found"}, status_code=404)
+
+@app.delete("/api/nudge/{nid}")
+def nudge_del(nid: str, req: Request):
+    if not need_auth(req):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    m = load_mem()
+    m["reminders"] = [r for r in m.get("reminders", []) if r.get("id") != nid]
+    save_mem(m)
+    return {"ok": True}
 
 @app.post("/api/clear")
 def clear_chat(req: Request):
