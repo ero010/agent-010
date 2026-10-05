@@ -331,8 +331,77 @@ def tool_pc_screenshot(args: dict):
     except Exception as e:
         return json.dumps({"error": "screenshot failed (needs Pillow: pip install pillow): " + str(e)[:200]})
 
-PC_TOOLS = [
-    {"type": "function", "function": {
+def chrome_ctx():
+    """Connect to the USER's own Chrome (must run with --remote-debugging-port=9222)."""
+    from playwright.sync_api import sync_playwright
+    p = sync_playwright().start()
+    try:
+        browser = p.chromium.connect_over_cdp("http://localhost:9222", timeout=8000)
+    except Exception:
+        p.stop()
+        raise RuntimeError("your Chrome is not in debug mode — run ChromeDebug.bat first (close Chrome, then launch it)")
+    return p, browser
+
+def chrome_pages(browser):
+    return [pg for pg in browser.contexts[0].pages if not pg.url.startswith("chrome")] if browser.contexts else []
+
+def tool_chrome_tabs(args: dict):
+    g = pc_guard("chrome", "")
+    if g:
+        return json.dumps({"error": g})
+    try:
+        p, browser = chrome_ctx()
+        try:
+            out = [{"i": i, "title": pg.title()[:120], "url": pg.url[:300]}
+                   for i, pg in enumerate(chrome_pages(browser))]
+            return json.dumps({"tabs": out, "note": "this is the USER's own logged-in Chrome"})
+        finally:
+            browser.close()
+            p.stop()
+    except Exception as e:
+        return json.dumps({"error": str(e)[:300]})
+
+def tool_chrome_go(args: dict):
+    g = pc_guard("chrome", "")
+    if g:
+        return json.dumps({"error": g})
+    url = (args.get("url") or "").strip()[:500]
+    if not url.startswith(("http://", "https://")):
+        return json.dumps({"error": "give me a full link starting with http"})
+    try:
+        p, browser = chrome_ctx()
+        try:
+            pages = chrome_pages(browser)
+            pg = pages[0] if pages else browser.contexts[0].new_page()
+            pg.goto(url, timeout=25000, wait_until="domcontentloaded")
+            return json.dumps({"ok": True, "title": pg.title()[:200], "url": pg.url[:300]})
+        finally:
+            browser.close()
+            p.stop()
+    except Exception as e:
+        return json.dumps({"error": str(e)[:300]})
+
+def tool_chrome_read(args: dict):
+    g = pc_guard("chrome", "")
+    if g:
+        return json.dumps({"error": g})
+    try:
+        p, browser = chrome_ctx()
+        try:
+            pages = chrome_pages(browser)
+            if not pages:
+                return json.dumps({"error": "no open tabs"})
+            i = int(args.get("tab", 0))
+            pg = pages[i] if 0 <= i < len(pages) else pages[0]
+            return json.dumps({"title": pg.title()[:200], "url": pg.url[:300],
+                               "text": pg.inner_text("body")[:6000]}, ensure_ascii=False)
+        finally:
+            browser.close()
+            p.stop()
+    except Exception as e:
+        return json.dumps({"error": str(e)[:300]})
+
+PC_TOOLS = [    {"type": "function", "function": {
         "name": "pc_open",
         "description": "Open something on the user's laptop: an app name (notepad, calculator, chrome), a URL, or a file/folder path. Runs after their approval.",
         "parameters": {"type": "object", "properties": {
@@ -353,11 +422,27 @@ PC_TOOLS = [
         "name": "pc_screenshot",
         "description": "Take a screenshot of the laptop screen and save it. You cannot see it with text-only brains — tell the user it's saved for them.",
         "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "chrome_tabs",
+        "description": "List the USER's own open Chrome tabs (their real logged-in browser). Use to see what they have open or to find a tab.",
+        "parameters": {"type": "object", "properties": {}}}},
+    {"type": "function", "function": {
+        "name": "chrome_go",
+        "description": "Open a URL in the USER's own Chrome (first tab). Their logins apply — good for YouTube, Facebook, Gmail, Canva.",
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string", "description": "full http(s) URL"}}, "required": ["url"]}}},
+    {"type": "function", "function": {
+        "name": "chrome_read",
+        "description": "Read the text of a tab in the USER's own Chrome (e.g. Facebook messages). Tab 0 = first tab.",
+        "parameters": {"type": "object", "properties": {
+            "tab": {"type": "integer", "description": "tab number, default 0"}}}}},
 ]
 
 if LOCAL_PC:
     TOOL_HANDLERS.update({"pc_open": tool_pc_open, "pc_run": tool_pc_run,
-                           "pc_file": tool_pc_file, "pc_screenshot": tool_pc_screenshot})
+                           "pc_file": tool_pc_file, "pc_screenshot": tool_pc_screenshot,
+                           "chrome_tabs": tool_chrome_tabs, "chrome_go": tool_chrome_go,
+                           "chrome_read": tool_chrome_read})
 TOOLS = [
     {"type": "function", "function": {
         "name": "web_search",
@@ -527,7 +612,7 @@ Help user fix their life and achieve goals. Be present: if something is due, che
 Below you get the FULL conversation history plus MEMORY. Read the user's new message,
 then read ALL past messages for context, then answer using everything you know.
 You have live tools: web_search (current facts), browse_page (open links in Chrome), get_datetime (exact time) and save_insight (stash an interesting find to tell them later). Use them instead of guessing.
-{"PC: you can act on the user's laptop with pc_open, pc_file and pc_screenshot (instant), pc_run and outside writes (need their Approve tap — always tell them to tap it). When they ask you to open/run/do something, CALL the tool immediately instead of asking for confirmation — approval happens via their Approve button. Paths: use %USERPROFILE% for home (e.g. %USERPROFILE%/Documents)." if LOCAL_PC else ""}
+{"PC: you can act on the user's laptop with pc_open, pc_file and pc_screenshot (instant), pc_run and outside writes (need their Approve tap — always tell them to tap it). When they ask you to open/run/do something, CALL the tool immediately instead of asking for confirmation — approval happens via their Approve button. Paths: use %USERPROFILE% for home (e.g. %USERPROFILE%/Documents). chrome_tabs/chrome_go/chrome_read work inside THEIR real logged-in Chrome (needs ChromeDebug.bat running) — use them for YouTube, Facebook messages, Gmail." if LOCAL_PC else ""}
 MEMORY: {mem_text}{nudge_text}
 Rules:
 1. If user shares a durable fact (name, goal, habit, preference), acknowledge it briefly and it will be auto-saved.
