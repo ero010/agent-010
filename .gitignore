@@ -3,6 +3,7 @@
 memory.json
 uploads/
 .browser-profile/
+.chrome-debug/
 
 # junk
 __pycache__/
