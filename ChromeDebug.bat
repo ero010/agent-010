@@ -1,11 +1,8 @@
 @echo off
-REM 010's own Chrome (separate profile copy - your main Chrome stays untouched).
-REM If logins ever expire here, delete the .chrome-debug folder and ask 010 to re-sync it.
-cd /d "%~dp0"
-if not exist ".chrome-debug" (
-  echo Copying your Chrome profile once for 010...
-  robocopy "%LOCALAPPDATA%\Google\Chrome\User Data" ".chrome-debug" /E /XD Cache "Code Cache" GPUCache ShaderCache "Service Worker" Crashpad "Crash Reports" /XF "Singleton*" /R:1 /W:1 /NFL /NDL /NJH /NJS
-)
-start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="%~dp0.chrome-debug" --no-first-run
-echo 010's Chrome is open. Log into your sites there ONCE, then leave it open.
+REM 010 uses YOUR Chrome profile (your tabs, your logins).
+REM Close Chrome first if it is open, then run this.
+taskkill /F /T /IM chrome.exe 2>nul
+timeout /t 3 /nobreak >nul
+start "" "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="%LOCALAPPDATA%\Google\Chrome\User Data" --profile-directory="Profile 7" --no-first-run
+echo 010 is now inside YOUR Chrome. Leave this window open.
 pause
