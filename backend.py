@@ -10,7 +10,9 @@ from pydantic import BaseModel
 from openai import OpenAI
 
 BASE = Path(__file__).parent
-MEM_FILE = BASE / "memory.json"
+DATA_DIR = Path(os.getenv("DATA_DIR", "")) or BASE
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+MEM_FILE = DATA_DIR / "memory.json"
 INDEX_FILE = BASE / "index.html"
 ENV_FILE = BASE / ".env"
 
@@ -53,6 +55,18 @@ def load_mem():
 
 def save_mem(m):
     MEM_FILE.write_text(json.dumps(m, indent=2, ensure_ascii=False), encoding="utf-8")
+    if os.getenv("DATA_DIR", ""):
+        # cloud volume: sync in background so replies stay fast
+        import threading
+
+        def _commit():
+            try:
+                import modal
+                modal.Volume.from_name("agent010-data").commit()
+            except Exception:
+                pass
+
+        threading.Thread(target=_commit, daemon=True).start()
 
 def ensure_ids(m):
     changed = False
@@ -129,7 +143,7 @@ async def upload(req: Request, file: UploadFile = File(...)):
     if not name.endswith((".txt", ".md", ".csv", ".json", ".png", ".jpg", ".jpeg", ".webp")):
         return JSONResponse({"error": "That file type is not supported yet. I can read text files (.txt, .md, .csv, .json) and see images (.png, .jpg, .webp)."}, status_code=400)
     # everything kept: original saved to uploads/, content remembered in memory.json
-    updir = BASE / "uploads"
+    updir = DATA_DIR / "uploads"
     updir.mkdir(exist_ok=True)
     safename = datetime.now().strftime("%Y%m%d-%H%M%S-") + "".join(c for c in file.filename if c.isalnum() or c in "._-")[:80]
     (updir / safename).write_bytes(data)
