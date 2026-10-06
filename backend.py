@@ -256,7 +256,11 @@ def canva_login(req: Request):
     return RedirectResponse(url)
 
 @app.get("/api/canva/callback")
-def canva_callback(code: str = "", state: str = ""):
+def canva_callback(code: str = "", state: str = "", error: str = "",
+                   error_description: str = ""):
+    if error:
+        return HTMLResponse(f"<h3>Canva refused: {error_description or error}. "
+                            f"Fix it in your Canva app settings, then start again from the Canva button.</h3>")
     verifier = _pkce_store.pop(state, "")
     cid, sec = os.getenv("CANVA_CLIENT_ID", ""), os.getenv("CANVA_CLIENT_SECRET", "")
     if not verifier or not code or not cid:
