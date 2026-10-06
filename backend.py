@@ -53,7 +53,86 @@ def load_mem():
         except: pass
     return {"profile": {"name": "", "goals": [], "notes": ""}, "facts": [], "conversations": []}
 
-def save_mem(m):
+CONTAINER_ID = uuid.uuid4().hex[:8]
+
+def merge_mem(disk, incoming):
+    """Union disk + incoming so a stale/parallel write can NEVER lose data.
+    Same id/key: incoming (fresher) wins. Tombstoned ids stay deleted."""
+    if not isinstance(disk, dict):
+        return incoming
+    tb = incoming.get("_tombstones", {}) or {}
+    tconv = set(tb.get("conv", []))
+    tfact = set(tuple(x) for x in tb.get("fact", []))
+    tgoal = set(tb.get("goal", []))
+    trem = set(tb.get("rem", []))
+    tprof = set(tb.get("profile", []))
+
+    def fkey(f):
+        return (f.get("type", ""), f.get("text", ""), f.get("name", ""))
+
+    convs, order = {}, []
+    for c in disk.get("conversations", []) + incoming.get("conversations", []):
+        cid = c.get("id") or (c.get("role", "") + "|" + str(c.get("content", ""))[:100])
+        if cid in tconv:
+            continue
+        if cid not in convs:
+            order.append(cid)
+        convs[cid] = c
+    facts = {}
+    for f in disk.get("facts", []) + incoming.get("facts", []):
+        k = fkey(f)
+        if k not in tfact:
+            facts[k] = f
+    rems = {}
+    for r in disk.get("reminders", []) + incoming.get("reminders", []):
+        if r.get("id") not in trem:
+            rems[r.get("id")] = r
+    inss = {}
+    for x in disk.get("insights", []) + incoming.get("insights", []):
+        inss[x.get("id")] = x
+
+    dp = disk.get("profile", {}) or {}
+    ip = incoming.get("profile", {}) or {}
+    prof = {}
+    for k in ("name", "location", "notes"):
+        if k in tprof:
+            prof[k] = ip.get(k, "")
+        else:
+            prof[k] = ip.get(k) or dp.get(k, "")
+    goals = [g for g in dict.fromkeys((dp.get("goals", []) or []) + (ip.get("goals", []) or []))
+             if g not in tgoal]
+    prof["goals"] = goals
+
+    old_tb = disk.get("_tombstones", {}) or {}
+    new_tb = {"conv": list(dict.fromkeys(
+        (old_tb.get("conv", []) or []) + (tb.get("conv", []) or [])))[-300:],
+        "fact": list(dict.fromkeys(
+            [tuple(x) for x in (old_tb.get("fact", []) or [])] + list(tfact)))[-300:],
+        "goal": list(dict.fromkeys(
+            (old_tb.get("goal", []) or []) + list(tgoal)))[-300:],
+        "rem": list(dict.fromkeys(
+            (old_tb.get("rem", []) or []) + list(trem)))[-300:],
+        "profile": list(dict.fromkeys(
+            (old_tb.get("profile", []) or []) + list(tprof)))[-20:]}
+    return {"profile": prof, "facts": list(facts.values()),
+            "conversations": [convs[c] for c in order],
+            "reminders": list(rems.values()), "insights": list(inss.values()),
+            "_tombstones": new_tb}
+
+def tomb(m, kind, val):
+    tb = m.setdefault("_tombstones", {})
+    lst = tb.setdefault(kind, [])
+    if val not in lst:
+        lst.append(val)
+        tb[kind] = lst[-300:]
+
+def save_mem(m, merge=True):
+    if merge and MEM_FILE.exists():
+        try:
+            disk = json.loads(MEM_FILE.read_text(encoding="utf-8"))
+            m = merge_mem(disk, m)
+        except Exception:
+            pass
     MEM_FILE.write_text(json.dumps(m, indent=2, ensure_ascii=False), encoding="utf-8")
     if os.getenv("DATA_DIR", ""):
         # cloud volume: commit NOW so no message is ever lost on container recycle
@@ -107,6 +186,19 @@ def get_memory(req: Request):
     if not need_auth(req):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     return ensure_ids(load_mem())
+
+@app.get("/api/diag")
+def diag(req: Request):
+    if not need_auth(req):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    m = load_mem()
+    try:
+        mt = MEM_FILE.stat().st_mtime
+    except Exception:
+        mt = 0
+    return {"container": CONTAINER_ID, "model": MODEL, "local_pc": LOCAL_PC,
+            "messages": len(m.get("conversations", [])), "facts": len(m.get("facts", [])),
+            "mem_mtime": mt, "mem_file": str(MEM_FILE)}
 
 @app.get("/api/history")
 def get_history(req: Request):
@@ -733,26 +825,39 @@ def extract_certs(text: str):
 def cascade_delete(m, content: str):
     """Wipe every trace of a deleted message: auto-facts, goals, learned name."""
     profile = m.get("profile", {})
-    m["facts"] = [f for f in m.get("facts", [])
-                  if not (f.get("type") == "auto" and f.get("text") == content[:500])]
+    gone_facts = [f for f in m.get("facts", [])
+                  if (f.get("type") == "auto" and f.get("text") == content[:500])]
+    m["facts"] = [f for f in m.get("facts", []) if f not in gone_facts]
+    for f in gone_facts:
+        tomb(m, "fact", [f.get("type", ""), f.get("text", ""), f.get("name", "")])
     g = content.strip()[:300]
+    if g in profile.get("goals", []):
+        tomb(m, "goal", g)
     profile["goals"] = [x for x in profile.get("goals", []) if x != g]
     nm = extract_name(content)
     if nm and profile.get("name") == nm:
         profile["name"] = ""
+        tomb(m, "profile", "name")
     loc = extract_location(content)
     if loc and profile.get("location") == loc:
         profile["location"] = ""
+        tomb(m, "profile", "location")
     for cert in extract_certs(content):
-        m["facts"] = [f for f in m.get("facts", []) if f.get("text") != f"Has {cert}"]
+        cut = [f for f in m.get("facts", []) if f.get("text") == f"Has {cert}"]
+        m["facts"] = [f for f in m.get("facts", []) if f not in cut]
+        for f in cut:
+            tomb(m, "fact", [f.get("type", ""), f.get("text", ""), f.get("name", "")])
 
 def cascade_edit(m, old: str, new: str):
     """Move every trace of an edited message to the new text."""
     profile = m.get("profile", {})
     for f in m.get("facts", []):
         if f.get("type") == "auto" and f.get("text") == old[:500]:
+            tomb(m, "fact", [f.get("type", ""), f.get("text", ""), f.get("name", "")])
             f["text"] = new[:500]
     g_old, g_new = old.strip()[:300], new.strip()[:300]
+    if g_old in profile.get("goals", []) and g_old != g_new:
+        tomb(m, "goal", g_old)
     profile["goals"] = [g_new if x == g_old else x for x in profile.get("goals", [])]
     nm = extract_name(new)
     if nm:
@@ -784,6 +889,7 @@ def del_message(mid: str, req: Request):
     if not gone:
         return JSONResponse({"error": "message not found"}, status_code=404)
     m["conversations"] = [c for c in m.get("conversations", []) if c.get("id") != mid]
+    tomb(m, "conv", mid)
     cascade_delete(m, gone.get("content", ""))
     save_mem(m)
     return {"ok": True, "wiped": True}
@@ -861,6 +967,7 @@ def nudge_del(nid: str, req: Request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     m = load_mem()
     m["reminders"] = [r for r in m.get("reminders", []) if r.get("id") != nid]
+    tomb(m, "rem", nid)
     save_mem(m)
     return {"ok": True}
 
@@ -924,8 +1031,13 @@ def clear_chat(req: Request):
     if not need_auth(req):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     m = load_mem()
+    try:
+        (DATA_DIR / f"trash-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json").write_text(
+            json.dumps(m, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
     m["conversations"] = []
-    save_mem(m)
+    save_mem(m, merge=False)
     return {"ok": True}
 
 @app.delete("/api/fact/{idx}")
