@@ -740,15 +740,8 @@ def complete_with_tools(client, model, msgs, tools=None):
                                                   max_tokens=800).choices[0].message.content
         raise
 
-@app.post("/api/chat")
-def chat(inp: ChatIn, req: Request):
-    if not need_auth(req):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-    m = load_mem()
-    client = get_client()
-    if not client:
-        return JSONResponse({"error": "No FREE key set. Get one at https://aistudio.google.com/apikey, paste into life-manager/.env as AI_API_KEY, restart."}, status_code=400)
-
+def build_system(m):
+    """Build the system prompt + limits + tools for this brain turn."""
     profile = m.get("profile", {})
     facts = m.get("facts", [])[-100:]  # last 100 facts — everything is kept in memory.json
     mem_text = json.dumps({"profile": profile, "facts": facts}, ensure_ascii=False)[:24000]
@@ -784,6 +777,19 @@ Rules:
 3. One short question max when the goal is vague.
 4. ONE message by default. Detail only when asked.
 5. Never use emojis anywhere in replies — plain refined text only.{rules_text}{disabled_text}"""
+    return system, profile, lim, tools_now
+
+@app.post("/api/chat")
+def chat(inp: ChatIn, req: Request):
+    if not need_auth(req):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    m = load_mem()
+    client = get_client()
+    if not client:
+        return JSONResponse({"error": "No FREE key set. Get one at https://aistudio.google.com/apikey, paste into life-manager/.env as AI_API_KEY, restart."}, status_code=400)
+
+    profile = m.get("profile", {})
+    system, _, lim, tools_now = build_system(m)
     # auto-learn simple facts: "my name is X", "my goal is Y"
     msg_low = inp.message.lower()
     learned = None
@@ -872,6 +878,32 @@ Rules:
 
 class EditIn(BaseModel):
     content: str
+    regenerate: bool = False
+
+def drop_following_assistant(m, idx):
+    """Remove assistant messages directly after conversations[idx]. Returns their ids."""
+    convs = m.get("conversations", [])
+    ids = []
+    j = idx + 1
+    while j < len(convs) and convs[j].get("role") != "user":
+        if convs[j].get("id"):
+            ids.append(convs[j]["id"])
+        j += 1
+    if ids:
+        m["conversations"] = [c for c in convs if c.get("id") not in ids]
+        for i in ids:
+            tomb(m, "conv", i)
+    return ids
+
+def budgeted_history(m):
+    full = clean_for_llm(m.get("conversations", []))
+    total, keep_from = 0, 0
+    for i in range(len(full) - 1, -1, -1):
+        total += len(full[i].get("content", ""))
+        if total > 400000:
+            keep_from = i + 1
+            break
+    return full[keep_from:]
 
 def extract_name(text: str):
     low = text.lower()
@@ -943,28 +975,65 @@ def edit_message(mid: str, inp: EditIn, req: Request):
     if not need_auth(req):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     m = load_mem()
-    for c in m.get("conversations", []):
-        if c.get("id") == mid:
-            old = c.get("content", "")
-            c["content"] = inp.content[:4000]
-            cascade_edit(m, old, inp.content)
-            save_mem(m)
-            return {"ok": True}
-    return JSONResponse({"error": "message not found"}, status_code=404)
+    convs = m.get("conversations", [])
+    idx = next((i for i, c in enumerate(convs) if c.get("id") == mid), None)
+    if idx is None:
+        return JSONResponse({"error": "message not found"}, status_code=404)
+    old = convs[idx].get("content", "")
+    convs[idx]["content"] = inp.content[:4000]
+    cascade_edit(m, old, inp.content)
+    dropped = []
+    reply = None
+    if inp.regenerate and convs[idx].get("role") == "user":
+        dropped = drop_following_assistant(m, idx)
+        save_mem(m)
+        client = get_client()
+        if not client:
+            return JSONResponse({"error": "no API key saved"}, status_code=400)
+        system, _, _, tools_now = build_system(m)
+        msgs = [{"role": "system", "content": system}]
+        msgs.extend(budgeted_history(m))
+        try:
+            reply = complete_with_tools(client, MODEL, msgs, tools_now)
+        except Exception as e:
+            return JSONResponse({"error": f"AI call failed: {e}"}, status_code=500)
+        m["conversations"].append({"id": uuid.uuid4().hex[:8], "role": "assistant",
+                                   "content": (reply or "")[:4000],
+                                   "at": datetime.now().isoformat()})
+    save_mem(m)
+    out = {"ok": True, "dropped": dropped}
+    if reply is not None:
+        out["reply"] = reply
+    return out
 
 @app.delete("/api/message/{mid}")
-def del_message(mid: str, req: Request):
+def del_message(mid: str, req: Request, after: str = "reply"):
     if not need_auth(req):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     m = load_mem()
-    gone = next((c for c in m.get("conversations", []) if c.get("id") == mid), None)
-    if not gone:
+    convs = m.get("conversations", [])
+    idx = next((i for i, c in enumerate(convs) if c.get("id") == mid), None)
+    if idx is None:
         return JSONResponse({"error": "message not found"}, status_code=404)
-    m["conversations"] = [c for c in m.get("conversations", []) if c.get("id") != mid]
-    tomb(m, "conv", mid)
+    gone = convs[idx]
+    deleted = [mid]
+    if gone.get("role") == "user":
+        if after == "all":
+            for c in convs[idx + 1:]:
+                if c.get("id"):
+                    deleted.append(c["id"])
+        else:
+            j = idx + 1
+            while j < len(convs) and convs[j].get("role") != "user":
+                if convs[j].get("id"):
+                    deleted.append(convs[j].get("id"))
+                j += 1
+    m["conversations"] = [c for c in convs if c.get("id") not in deleted]
+    for i in deleted:
+        tomb(m, "conv", i)
     cascade_delete(m, gone.get("content", ""))
     save_mem(m)
-    return {"ok": True, "wiped": True}
+    return {"ok": True, "wiped": True, "deleted": deleted}
 
 @app.get("/api/export")
 def export_mem(req: Request):

@@ -111,8 +111,8 @@ function bubble(id, who, text, at){
   const w=fmtTime(at); if(w){ const s=document.createElement('div'); s.className='when'; s.textContent=w; d.appendChild(s); }
   const tools=document.createElement('div'); tools.className='tools';
   tools.innerHTML='<span title="Edit">Edit</span><span title="Delete">Delete</span>';
-  tools.children[0].onclick=()=>editMsg(id, text);
-  tools.children[1].onclick=()=>delMsg(id);
+  tools.children[0].onclick=()=>editMsg(id, text, who);
+  tools.children[1].onclick=()=>delMsg(id, who);
   d.appendChild(tools);
   document.getElementById('chat').appendChild(d);
   d.scrollIntoView({block:'nearest'});
@@ -207,16 +207,27 @@ async function send(){
     done();
   }catch(e){ document.getElementById('typing')?.remove(); optNode.remove(); document.getElementById('in').value=draft; if(e.message!=='locked') bubble('e'+Date.now(),'bot','Note: Send failed (connection?). Your message is back in the box — hit Send to retry.'); done(); }
 }
-async function editMsg(id, old){
+async function editMsg(id, old, who){
   const v=prompt('Edit message:', old); if(v===null||v===old)return;
+  let regen=false;
+  if(who==='me') regen=confirm('Get a fresh reply to the edited message? (OK = yes, Cancel = just fix the text)');
   try{
-    const r=await api('/api/message/'+id,{method:'PUT',body:JSON.stringify({content:v})});
+    let r;
+    if(regen){
+      const node0=document.getElementById('m-'+id);
+      if(node0){ const tp=document.createElement('div'); tp.className='msg bot typing'; tp.id='typing'; tp.innerHTML='<i>●</i> <i>●</i> <i>●</i>'; node0.after(tp); }
+      r=await api('/api/message/'+id,{method:'PUT',body:JSON.stringify({content:v,regenerate:true})});
+    } else {
+      const node=document.getElementById('m-'+id);
+      if(node) node.firstChild.textContent=v;
+      r=await api('/api/message/'+id,{method:'PUT',body:JSON.stringify({content:v})});
+    }
     const j=await r.json();
-    if(j.error){ bubble('e'+Date.now(),'bot','Note: edit failed — '+j.error); return; }
-    const node=document.getElementById('m-'+id);
-    if(node) node.firstChild.textContent=v;
+    document.getElementById('typing')?.remove();
+    if(j.error){ bubble('e'+Date.now(),'bot','Note: edit failed — '+j.error); loadHistory(); return; }
+    if(j.reply){ lastReply=j.reply.replaceAll('///',' '); addBot(j.reply); }
     loadHistory();
-  }catch(e){ if(e.message!=='locked') bubble('e'+Date.now(),'bot','Note: edit failed (connection?). Try again.'); }
+  }catch(e){ document.getElementById('typing')?.remove(); if(e.message!=='locked') bubble('e'+Date.now(),'bot','Note: edit failed (connection?). Try again.'); }
 }
 let CAT=[];
 async function refreshModelLabel(){ try{ const r=await api('/api/settings'); const j=await r.json(); document.getElementById('model').textContent=j.model; }catch(e){} }
@@ -354,16 +365,18 @@ async function importMem(){
   document.getElementById('impfile').value='';
   loadHistory();
 }
-async function delMsg(id){
+async function delMsg(id, who){
   if(!confirm('Delete this message?'))return;
+  let after='none';
+  if(who==='me') after=confirm('Also delete everything after it? (OK = all after too, Cancel = just this + its reply)')?'all':'reply';
   const node=document.getElementById('m-'+id);
   if(node) node.style.opacity='.35';
   try{
-    const r=await api('/api/message/'+id,{method:'DELETE'});
+    const r=await api('/api/message/'+id+(after==='none'?'':'?after='+after),{method:'DELETE'});
     const j=await r.json();
     if(j.error){ if(node) node.style.opacity='1'; bubble('e'+Date.now(),'bot','Note: delete failed — '+j.error); return; }
-    if(node) node.remove();
-    allMsgs=allMsgs.filter(c=>c.id!==id);
+    (j.deleted||[id]).forEach(x=>{ const n=document.getElementById('m-'+x); if(n)n.remove(); });
+    allMsgs=allMsgs.filter(c=>!(j.deleted||[id]).includes(c.id));
   }catch(e){ if(node) node.style.opacity='1'; if(e.message!=='locked') bubble('e'+Date.now(),'bot','Note: delete failed (connection?). Try again.'); }
 }
 async function clearChat(){ if(!confirm('Delete ALL chat history? Memory facts stay.'))return; await api('/api/clear',{method:'POST'}); loadHistory(); }
