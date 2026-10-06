@@ -1,4 +1,4 @@
-import os, json, base64, uuid
+import os, json, base64, uuid, time
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlencode
@@ -130,6 +130,23 @@ def tomb(m, kind, val):
         lst.append(val)
         tb[kind] = lst[-300:]
 
+def commit_volume(retries=3):
+    """Push the cloud volume until it sticks. Returns True only when durable."""
+    if not os.getenv("DATA_DIR", ""):
+        return True
+    try:
+        import modal
+        vol = modal.Volume.from_name("agent010-data")
+    except Exception:
+        return False
+    for i in range(retries):
+        try:
+            vol.commit()
+            return True
+        except Exception:
+            time.sleep(1 + i)
+    return False
+
 def save_mem(m, merge=True):
     if merge and MEM_FILE.exists():
         try:
@@ -138,13 +155,8 @@ def save_mem(m, merge=True):
         except Exception:
             pass
     MEM_FILE.write_text(json.dumps(m, indent=2, ensure_ascii=False), encoding="utf-8")
-    if os.getenv("DATA_DIR", ""):
-        # cloud volume: commit NOW so no message is ever lost on container recycle
-        try:
-            import modal
-            modal.Volume.from_name("agent010-data").commit()
-        except Exception:
-            pass
+    # cloud volume: commit until durable — a silent failure resurrects deletes
+    return commit_volume()
 
 def ensure_ids(m):
     changed = False
@@ -986,7 +998,8 @@ def edit_message(mid: str, inp: EditIn, req: Request):
     reply = None
     if inp.regenerate and convs[idx].get("role") == "user":
         dropped = drop_following_assistant(m, idx)
-        save_mem(m)
+        if not save_mem(m):
+            return JSONResponse({"error": "edit did not stick (cloud save failed) — try again"}, status_code=500)
         client = get_client()
         if not client:
             return JSONResponse({"error": "no API key saved"}, status_code=400)
@@ -1000,7 +1013,8 @@ def edit_message(mid: str, inp: EditIn, req: Request):
         m["conversations"].append({"id": uuid.uuid4().hex[:8], "role": "assistant",
                                    "content": (reply or "")[:4000],
                                    "at": datetime.now().isoformat()})
-    save_mem(m)
+    if not save_mem(m):
+        return JSONResponse({"error": "edit did not stick (cloud save failed) — try again"}, status_code=500)
     out = {"ok": True, "dropped": dropped}
     if reply is not None:
         out["reply"] = reply
@@ -1032,7 +1046,8 @@ def del_message(mid: str, req: Request, after: str = "reply"):
     for i in deleted:
         tomb(m, "conv", i)
     cascade_delete(m, gone.get("content", ""))
-    save_mem(m)
+    if not save_mem(m):
+        return JSONResponse({"error": "delete did not stick (cloud save failed) — try again"}, status_code=500)
     return {"ok": True, "wiped": True, "deleted": deleted}
 
 @app.get("/api/export")
@@ -1178,7 +1193,8 @@ def clear_chat(req: Request):
     except Exception:
         pass
     m["conversations"] = []
-    save_mem(m, merge=False)
+    if not save_mem(m, merge=False):
+        return JSONResponse({"error": "clear did not stick (cloud save failed) — try again"}, status_code=500)
     return {"ok": True}
 
 @app.delete("/api/fact/{idx}")

@@ -370,16 +370,54 @@ async function delMsg(id, who){
   let after='none';
   if(who==='me') after=confirm('Also delete everything after it? (OK = all after too, Cancel = just this + its reply)')?'all':'reply';
   const node=document.getElementById('m-'+id);
-  if(node) node.style.opacity='.35';
+  // remove instantly: the bubble plus following reply bubbles (same as server will)
+  const doomed=[];
+  if(node){
+    doomed.push(node);
+    if(who==='me'){
+      let sib=node.nextElementSibling, rid=null;
+      while(sib&&sib.id&&sib.id.startsWith('m-')&&!sib.classList.contains('me')){
+        if(after!=='all'){
+          if(rid===null)rid=sib.id;
+          if(sib.id!==rid)break;
+        }
+        doomed.push(sib);
+        sib=sib.nextElementSibling;
+      }
+    }
+    doomed.forEach(n=>n.remove());
+  }
+  const doomedIds=doomed.map(n=>n.id.replace(/^m-/,''));
+  allMsgs=allMsgs.filter(c=>!doomedIds.includes(c.id));
   try{
     const r=await api('/api/message/'+id+(after==='none'?'':'?after='+after),{method:'DELETE'});
     const j=await r.json();
-    if(j.error){ if(node) node.style.opacity='1'; bubble('e'+Date.now(),'bot','Note: delete failed — '+j.error); return; }
-    (j.deleted||[id]).forEach(x=>{ const n=document.getElementById('m-'+x); if(n)n.remove(); });
+    if(j.error){
+      loadHistory();
+      bubble('e'+Date.now(),'bot','Note: delete failed — '+j.error+' (view restored)');
+      return;
+    }
+    // authoritative reconciliation with what the server actually removed
+    (j.deleted||[id]).forEach(x=>{
+      document.querySelectorAll('[id="m-'+x+'"]').forEach(n=>n.remove());
+    });
     allMsgs=allMsgs.filter(c=>!(j.deleted||[id]).includes(c.id));
-  }catch(e){ if(node) node.style.opacity='1'; if(e.message!=='locked') bubble('e'+Date.now(),'bot','Note: delete failed (connection?). Try again.'); }
+  }catch(e){
+    loadHistory();
+    if(e.message!=='locked') bubble('e'+Date.now(),'bot','Note: delete failed (connection?) — view restored, try again.');
+  }
 }
-async function clearChat(){ if(!confirm('Delete ALL chat history? Memory facts stay.'))return; await api('/api/clear',{method:'POST'}); loadHistory(); }
+async function clearChat(){
+  if(!confirm('Delete ALL chat history? Memory facts stay.'))return;
+  const box=document.getElementById('chat'); const backup=box.innerHTML; const backupMsgs=allMsgs;
+  box.innerHTML=''; allMsgs=[];
+  bubble('tmpclear','bot','Clearing…');
+  try{
+    const r=await api('/api/clear',{method:'POST'}); const j=await r.json();
+    if(j.error) throw new Error(j.error);
+    loadHistory();
+  }catch(e){ box.innerHTML=backup; allMsgs=backupMsgs; if(e.message!=='locked') bubble('e'+Date.now(),'bot','Note: clear failed ('+e.message+') — nothing was deleted.'); }
+}
 async function saveProfile(){
   const name=prompt('Your name?'); const goals=prompt('Your #1 goal?');
   await api('/api/profile',{method:'POST',body:JSON.stringify({name,goals:goals?[goals]:[]})});
