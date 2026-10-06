@@ -82,6 +82,7 @@ input[type=file]{display:none}
 <small><b>Move Personal Guide to another device / cloud:</b></small>
 <div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="exportMem()">Export memory</button><button onclick="document.getElementById('impfile').click()">Import memory</button>
 <input type="file" id="impfile" accept=".json" style="display:none" onchange="importMem()"></div>
+<small id="buildtag" style="color:#5b6b86"></small>
 </div></div>
 <div id="rulesmodal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:98;align-items:center;justify-content:center">
 <div style="background:#fff;color:#101c30;padding:20px;border-radius:18px;display:flex;flex-direction:column;gap:10px;width:min(440px,92vw);max-height:88vh;overflow:auto;box-shadow:0 20px 60px rgba(90,80,220,.25)">
@@ -103,6 +104,14 @@ input[type=file]{display:none}
 <video id="cam" style="display:none" autoplay playsinline width="320"></video>
 <canvas id="cv" style="display:none"></canvas>
 <script>
+window.PG_BUILD='2026-10-06-stream1';
+window.addEventListener('error',e=>{
+  try{
+    const d=document.createElement('div'); d.className='msg bot';
+    d.textContent='Note: page error — '+((e.message||'unknown')+' ').slice(0,160)+' Screenshot this for 010.';
+    document.getElementById('chat').appendChild(d);
+  }catch(_){}
+});
 let lastReply="", listening=false, recog=null, img=null;
 const pw = () => localStorage.getItem('lm_pw') || '';
 function headers(j=true){ const h={}; if(j) h['Content-Type']='application/json'; if(pw()) h['x-app-password']=pw(); return h; }
@@ -160,7 +169,8 @@ function addBot(text, at){
 function renderMsgs(n){
   const box=chatBox();
   const oldH=box.scrollHeight, oldT=box.scrollTop;
-  box.innerHTML='';
+  try{
+    box.innerHTML='';
   const shown=allMsgs.slice(-n);
   if(allMsgs.length>n){
     const b=document.createElement('button'); b.textContent='Show older ('+(allMsgs.length-n)+' more)';
@@ -174,6 +184,12 @@ function renderMsgs(n){
   // never yank the user's reading position: only pin when they were at bottom
   if(firstRender||stickBottom){ firstRender=false; pinBottom(); }
   else box.scrollTop=oldT+(box.scrollHeight-oldH);
+  }catch(e){
+    box.innerHTML='';
+    const d=document.createElement('div'); d.className='msg bot';
+    d.textContent='Note: could not draw messages ('+String(e.message||e).slice(0,120)+'). Reload the page.';
+    box.appendChild(d);
+  }
 }
 let staged=null; // {kind:'image',dataUrl,file?} or {kind:'file',file}
 function stageChip(t){ document.getElementById('stagename').textContent=t; document.getElementById('stage').style.display='flex'; }
@@ -197,7 +213,7 @@ async function send(){
   stickBottom=true;
   document.getElementById('in').value='';
   const draft=t;
-  const mine=t||(staged?staged.file.name:'[image]');
+  const mine=t||(staged?(staged.file?staged.file.name:'photo'):'[image]');
   const optNode=bubble('tmp'+Date.now(),'me',mine,new Date().toISOString());
   const tp=document.createElement('div'); tp.className='msg bot typing'; tp.id='typing'; tp.innerHTML='<i>●</i> <i>●</i> <i>●</i>';
   document.getElementById('chat').appendChild(tp); maybePin();
@@ -328,6 +344,7 @@ async function openSettings(){
   document.getElementById('seturl').value=j.base_url;
   document.getElementById('setkey').value='';
   document.getElementById('setmsg').textContent='';
+  document.getElementById('buildtag').textContent='build '+window.PG_BUILD;
   showFeatures();
   document.getElementById('settings').style.display='flex';
 }
