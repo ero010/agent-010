@@ -124,14 +124,25 @@ async function api(path, opts={}){
 function doLogin(){ const v=document.getElementById('pw').value; localStorage.setItem('lm_pw', v); document.getElementById('login').style.display='none'; loadHistory(); }
 function logout(){ localStorage.removeItem('lm_pw'); location.reload(); }
 function fmtTime(at){ if(!at)return ''; try{ const d=new Date(at); return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); }catch(e){ return ''; } }
+function richText(el, text){
+  String(text||'').split(/(https?:\/\/\S+|\/api\/file\/\S+)/g).forEach(p=>{
+    if(/^(https?:\/\/\S+|\/api\/file\/\S+)$/.test(p)){
+      const a=document.createElement('a'); a.href=p;
+      a.textContent=p.startsWith('/api/file')?'Download file':p;
+      a.target='_blank'; a.rel='noopener'; a.style.color='#2f6bff'; a.style.fontWeight='600';
+      el.appendChild(a);
+    } else if(p){ el.appendChild(document.createTextNode(p)); }
+  });
+}
 function bubble(id, who, text, at){
   const d=document.createElement('div'); d.className='msg '+who; d.id='m-'+id;
-  const t=document.createElement('div'); t.textContent=text; d.appendChild(t);
+  const t=document.createElement('div'); richText(t,text); d.appendChild(t);
+  d.dataset.full=text;
   const w=fmtTime(at); if(w){ const s=document.createElement('div'); s.className='when'; s.textContent=w; d.appendChild(s); }
   const tools=document.createElement('div'); tools.className='tools';
   if(who==='me'){
     tools.innerHTML='<span title="Edit">Edit</span><span title="Delete">Delete</span>';
-    tools.children[0].onclick=()=>editMsg(id, text, who);
+    tools.children[0].onclick=()=>editMsg(id, d.dataset.full, who);
     tools.children[1].onclick=()=>delMsg(id, who);
   } else { tools.style.display='none'; }
   d.appendChild(tools);
@@ -317,7 +328,7 @@ async function editMsg(id, old, who){
       r=await api('/api/message/'+id,{method:'PUT',body:JSON.stringify({content:v,regenerate:true})});
     } else {
       const node=document.getElementById('m-'+id);
-      if(node) node.firstChild.textContent=v;
+      if(node){ node.dataset.full=v; const t=node.firstChild; t.innerHTML=''; richText(t,v); }
       r=await api('/api/message/'+id,{method:'PUT',body:JSON.stringify({content:v})});
     }
     const j=await r.json();

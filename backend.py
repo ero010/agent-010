@@ -376,6 +376,134 @@ def tool_save_insight(args: dict):
     return json.dumps({"saved": True})
 
 TOOL_HANDLERS["save_insight"] = tool_save_insight
+# studio tools register after their defs below
+
+def studio_file(name: str):
+    updir = DATA_DIR / "uploads"
+    updir.mkdir(exist_ok=True)
+    return updir, name
+
+def tool_make_image(args: dict):
+    prompt = (args.get("prompt") or "").strip()[:500]
+    if not prompt:
+        return json.dumps({"error": "describe the image first"})
+    import random
+    url = ("https://image.pollinations.ai/prompt/" + quote(prompt) +
+           f"?width=1024&height=1024&seed={random.randint(1, 999999)}&nologo=true&model=flux")
+    try:
+        req = _urlreq.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        data = _urlreq.urlopen(req, timeout=120).read()
+        if len(data) < 5000:
+            return json.dumps({"error": "image service returned nothing — try again"})
+        updir, _ = studio_file("")
+        fname = datetime.now().strftime("%Y%m%d-%H%M%S-img.jpg")
+        (updir / fname).write_bytes(data)
+        m = load_mem()
+        m["facts"].append({"type": "image", "name": fname, "saved_as": fname,
+                           "at": datetime.now().isoformat(),
+                           "note": "AI-generated: " + prompt[:200]})
+        save_mem(m)
+        return json.dumps({"ok": True, "file_url": "/api/file/" + fname,
+                           "note": "Image ready. Share the file_url link with the user."})
+    except Exception as e:
+        return json.dumps({"error": "image generation failed: " + str(e)[:200]})
+
+def tool_make_pdf(args: dict):
+    from fpdf import FPDF
+    title = (args.get("title") or "Document").strip()[:200]
+    pages = args.get("pages") or []
+    if isinstance(pages, str):
+        try:
+            pages = json.loads(pages)
+        except Exception:
+            pages = [{"heading": "Document", "body": pages[:3000]}]
+    if not isinstance(pages, list) or not pages:
+        return json.dumps({"error": "give me at least one page with heading and body"})
+    pages = pages[:10]
+
+    class Doc(FPDF):
+        def footer(self):
+            if self.page_no() == 1:
+                return
+            self.set_y(-15)
+            self.set_font("helvetica", "I", 8)
+            self.set_text_color(120, 120, 140)
+            self.cell(0, 10, f"Page {self.page_no() - 1}", align="C")
+
+    pdf = Doc()
+    pdf.set_auto_page_break(True, 20)
+    pdf.add_page()
+    pdf.ln(50)
+    pdf.set_font("helvetica", "B", 30)
+    pdf.set_text_color(26, 63, 212)
+    pdf.multi_cell(0, 14, title, align="C")
+    pdf.ln(6)
+    pdf.set_draw_color(200, 155, 60)
+    pdf.set_line_width(1.2)
+    pdf.line(60, pdf.get_y(), 150, pdf.get_y())
+    pdf.ln(10)
+    pdf.set_font("helvetica", "", 12)
+    pdf.set_text_color(90, 90, 110)
+    pdf.cell(0, 10, datetime.now().strftime("%B %d, %Y"), align="C")
+    for pg in pages:
+        pdf.add_page()
+        pdf.set_font("helvetica", "B", 18)
+        pdf.set_text_color(26, 63, 212)
+        pdf.multi_cell(0, 10, str(pg.get("heading", ""))[:200])
+        pdf.set_draw_color(200, 155, 60)
+        pdf.set_line_width(0.8)
+        pdf.line(10, pdf.get_y() + 2, 70, pdf.get_y() + 2)
+        pdf.ln(8)
+        pdf.set_font("helvetica", "", 11)
+        pdf.set_text_color(30, 30, 40)
+        pdf.multi_cell(0, 6, str(pg.get("body", ""))[:3000])
+    updir, _ = studio_file("")
+    fname = datetime.now().strftime("%Y%m%d-%H%M%S-doc.pdf")
+    pdf.output(str(updir / fname))
+    m = load_mem()
+    m["facts"].append({"type": "file", "name": fname, "saved_as": fname,
+                       "at": datetime.now().isoformat(),
+                       "text": title + " (" + str(len(pages)) + " pages)"})
+    save_mem(m)
+    return json.dumps({"ok": True, "file_url": "/api/file/" + fname,
+                       "note": "PDF ready. Share the file_url link with the user."})
+
+def tool_edit_image(args: dict):
+    from PIL import Image, ImageDraw
+    name = (args.get("name") or "").strip()
+    if not name:
+        return json.dumps({"error": "tell me which image (file name)"})
+    updir, _ = studio_file("")
+    src = updir / Path(name).name
+    if not src.exists():
+        cands = [p.name for p in updir.glob("*.jpg")] + [p.name for p in updir.glob("*.png")]
+        return json.dumps({"error": "not found. Saved images: " + ", ".join(cands[-10:])})
+    try:
+        im = Image.open(src).convert("RGB")
+        w = int(args.get("width", 0) or 0)
+        if w > 0:
+            im = im.resize((w, int(im.height * w / im.width)))
+        caption = (args.get("caption") or "").strip()[:200]
+        if caption:
+            bar, pad = 60, 12
+            canvas = Image.new("RGB", (im.width, im.height + bar), (16, 27, 48))
+            canvas.paste(im, (0, 0))
+            d = ImageDraw.Draw(canvas)
+            d.text((pad, im.height + 14), caption, fill=(255, 255, 255))
+            im = canvas
+        fname = datetime.now().strftime("%Y%m%d-%H%M%S-edit.jpg")
+        im.save(updir / fname, quality=90)
+        m = load_mem()
+        m["facts"].append({"type": "image", "name": fname, "saved_as": fname,
+                           "at": datetime.now().isoformat(), "note": "Edited: " + name})
+        save_mem(m)
+        return json.dumps({"ok": True, "file_url": "/api/file/" + fname,
+                           "note": "Edited image ready. Share the file_url link with the user."})
+    except Exception as e:
+        return json.dumps({"error": "edit failed: " + str(e)[:200]})
+
+TOOL_HANDLERS.update({"make_image": tool_make_image, "make_pdf": tool_make_pdf,
+                      "edit_image": tool_edit_image})
 
 LOCAL_PC = os.getenv("LOCAL_PC", "") == "1"
 PC_PENDING = {}
@@ -606,6 +734,24 @@ TOOLS = [
         "description": "Save something interesting you found while researching so you can tell the user about it later unprompted. Use sparingly — only genuinely useful finds tied to their goals.",
         "parameters": {"type": "object", "properties": {
             "text": {"type": "string", "description": "the interesting find, one or two sentences"}}, "required": ["text"]}}},
+    {"type": "function", "function": {
+        "name": "make_image",
+        "description": "Generate an AI image (poster, cover, logo, illustration, photo-style) from a description and send the user the download link. Free, takes ~30s.",
+        "parameters": {"type": "object", "properties": {
+            "prompt": {"type": "string", "description": "detailed visual description"}}, "required": ["prompt"]}}},
+    {"type": "function", "function": {
+        "name": "make_pdf",
+        "description": "Create a designed multi-page PDF (book, report, guide, CV, story): cover page + chapters. Up to 10 pages. Send the user the download link.",
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "document title"},
+            "pages": {"type": "string", "description": "JSON array like [{\"heading\": \"...\", \"body\": \"...\"}]"}}}}},
+    {"type": "function", "function": {
+        "name": "edit_image",
+        "description": "Edit a saved image: add a caption band at the bottom and/or resize width. Give the file name from a previous step.",
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "saved image file name"},
+            "caption": {"type": "string", "description": "text to add (optional)"},
+            "width": {"type": "integer", "description": "new width px (optional)"}}}, "required": ["name"]}},
 ]
 
 if LOCAL_PC:
@@ -784,7 +930,7 @@ Current local time: {now.strftime("%Y-%m-%d %H:%M (%A)")}.
 Help user fix their life and achieve goals. Be present: if something is due, check on them directly ("gym time — you locked in?").
 Below you get the FULL conversation history plus MEMORY. Read the user's new message,
 then read ALL past messages for context, then answer using everything you know.
-You have live tools: web_search (current facts), browse_page (open links in Chrome), get_datetime (exact time) and save_insight (stash an interesting find to tell them later). Use them instead of guessing.
+You have live tools: web_search (current facts), browse_page (open links in Chrome), get_datetime (exact time), save_insight (stash an interesting find to tell them later), make_image (generate AI images), make_pdf (create designed multi-page PDFs/books) and edit_image (caption/resize saved images). Use them instead of guessing. When you create a file, ALWAYS include its file_url link in your reply so they can download it.
 {"PC: you can act on the user's laptop with pc_open, pc_file and pc_screenshot (instant), pc_run and outside writes (need their Approve tap — always tell them to tap it). When they ask you to open/run/do something, CALL the tool immediately instead of asking for confirmation — approval happens via their Approve button. Paths: use %USERPROFILE% for home (e.g. %USERPROFILE%/Documents). chrome_tabs/chrome_go/chrome_read work inside THEIR real logged-in Chrome (needs ChromeDebug.bat running) — use them for YouTube, Facebook messages, Gmail." if LOCAL_PC else "IMPORTANT: you are the CLOUD copy — you cannot touch the laptop (no PC tools, no logged-in Chrome). If they ask to open/control anything on the laptop, tell them to use the laptop version (localhost:8000 with START.bat running)."}
 MEMORY: {mem_text}{nudge_text}
 Rules:
@@ -1235,6 +1381,18 @@ def del_message(mid: str, req: Request, after: str = "reply"):
     if not save_mem(m):
         return JSONResponse({"error": "delete did not stick (cloud save failed) — try again"}, status_code=500)
     return {"ok": True, "wiped": True, "deleted": deleted}
+
+@app.get("/api/file/{name}")
+def get_file(name: str, req: Request):
+    if not need_auth(req):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    safe = Path(name).name
+    if not safe or safe != name:
+        return JSONResponse({"error": "bad file name"}, status_code=400)
+    p = DATA_DIR / "uploads" / safe
+    if not p.exists():
+        return JSONResponse({"error": "file not found"}, status_code=404)
+    return FileResponse(p, filename=safe)
 
 @app.get("/api/export")
 def export_mem(req: Request):
