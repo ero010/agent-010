@@ -4,7 +4,7 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 import urllib.request as _urlreq
 from fastapi import FastAPI, UploadFile, File, Request
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
@@ -227,6 +227,58 @@ def get_history(req: Request):
     m = ensure_ids(load_mem())
     return {"conversations": m.get("conversations", []), "profile": m.get("profile", {}), "facts": m.get("facts", [])}
 
+@app.get("/api/canva/status")
+def canva_status(req: Request):
+    if not need_auth(req):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    cid, _ = os.getenv("CANVA_CLIENT_ID", ""), os.getenv("CANVA_CLIENT_SECRET", "")
+    m = load_mem()
+    return {"connected": bool((m.get("canva") or {}).get("refresh_token")),
+            "app_ready": bool(cid)}
+
+@app.get("/api/canva/login")
+def canva_login(req: Request):
+    if not need_auth(req):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    cid, _ = os.getenv("CANVA_CLIENT_ID", ""), os.getenv("CANVA_CLIENT_SECRET", "")
+    if not cid:
+        return JSONResponse({"error": "Canva app not configured yet (missing Client ID)"}, status_code=400)
+    import hashlib, secrets as _secrets, base64 as _b64
+    verifier = _b64.urlsafe_b64encode(_secrets.token_bytes(48)).decode().rstrip("=")
+    challenge = _b64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    state = uuid.uuid4().hex[:16]
+    _pkce_store[state] = verifier
+    url = (CANVA_AUTH_URL + "?" + urlencode(
+        {"code_challenge": challenge, "code_challenge_method": "S256",
+         "scope": CANVA_SCOPES, "response_type": "code", "client_id": cid,
+         "redirect_uri": CANVA_REDIRECT, "state": state}))
+    return RedirectResponse(url)
+
+@app.get("/api/canva/callback")
+def canva_callback(code: str = "", state: str = ""):
+    verifier = _pkce_store.pop(state, "")
+    cid, sec = os.getenv("CANVA_CLIENT_ID", ""), os.getenv("CANVA_CLIENT_SECRET", "")
+    if not verifier or not code or not cid:
+        return HTMLResponse("<h3>Canva connect failed — start again from the Canva button.</h3>")
+    try:
+        form = urlencode({"grant_type": "authorization_code", "code": code,
+                          "code_verifier": verifier, "client_id": cid,
+                          "client_secret": sec,
+                          "redirect_uri": CANVA_REDIRECT}).encode()
+        req = _urlreq.Request(CANVA_TOKEN_URL, data=form, method="POST",
+                              headers={"Content-Type": "application/x-www-form-urlencoded"})
+        t = json.loads(_urlreq.urlopen(req, timeout=30).read().decode())
+        m = load_mem()
+        m["canva"] = {"access_token": t["access_token"],
+                      "refresh_token": t.get("refresh_token", ""),
+                      "expires_at": time.time() + int(t.get("expires_in", 3600)) - 60,
+                      "at": datetime.now().isoformat()}
+        save_mem(m)
+        return HTMLResponse("<h3>Canva connected. Close this tab and talk to Personal Guide.</h3>")
+    except Exception as e:
+        return HTMLResponse(f"<h3>Canva connect failed: {str(e)[:200]}</h3>")
+
 @app.get("/api/rules")
 def get_rules(req: Request):
     if not need_auth(req):
@@ -369,6 +421,145 @@ TOOL_HANDLERS = {"web_search": tool_web_search, "get_datetime": tool_get_datetim
 
 _pending_insights = []
 
+# ---------- Canva Connect ----------
+CANVA_AUTH_URL = "https://www.canva.com/api/oauth/authorize"
+CANVA_TOKEN_URL = "https://api.canva.com/rest/v1/oauth/token"
+CANVA_API = "https://api.canva.com/rest/v1"
+CANVA_SCOPES = "design:content:read design:content:write"
+CANVA_REDIRECT = os.getenv("CANVA_REDIRECT_URI",
+                           "https://ero010--agent-010-api.modal.run/api/canva/callback")
+_pkce_store = {}
+
+def canva_token(m, refresh=True):
+    """Valid access token, refreshing once when needed. Returns None if not connected."""
+    c = m.get("canva") or {}
+    tok, exp = c.get("access_token", ""), float(c.get("expires_at", 0) or 0)
+    if tok and exp - time.time() > 120:
+        return tok
+    if not refresh or not c.get("refresh_token"):
+        return tok or None
+    cid, sec = os.getenv("CANVA_CLIENT_ID", ""), os.getenv("CANVA_CLIENT_SECRET", "")
+    if not cid or not sec:
+        return tok or None
+    try:
+        form = urlencode({"grant_type": "refresh_token", "refresh_token": c["refresh_token"],
+                          "client_id": cid, "client_secret": sec}).encode()
+        req = _urlreq.Request(CANVA_TOKEN_URL, data=form, method="POST",
+                              headers={"Content-Type": "application/x-www-form-urlencoded"})
+        t = json.loads(_urlreq.urlopen(req, timeout=30).read().decode())
+        c["access_token"] = t["access_token"]
+        c["refresh_token"] = t.get("refresh_token", c["refresh_token"])
+        c["expires_at"] = time.time() + int(t.get("expires_in", 3600)) - 60
+        m["canva"] = c
+        save_mem(m)
+        return c["access_token"]
+    except Exception:
+        return tok or None
+
+def canva_authed(method, path, m, body=None):
+    tok = canva_token(m)
+    if not tok:
+        return None, {"error": "Canva not connected — tell them to tap the Canva button and approve."}
+    try:
+        data = json.dumps(body).encode() if body is not None else None
+        req = _urlreq.Request(CANVA_API + path, data=data, method=method,
+                              headers={"Authorization": "Bearer " + tok,
+                                       "Content-Type": "application/json",
+                                       "User-Agent": "Mozilla/5.0"})
+        return json.loads(_urlreq.urlopen(req, timeout=30).read().decode()), None
+    except Exception as e:
+        return None, {"error": "Canva call failed: " + str(e)[:200]}
+
+def canva_poll(get_path, m, tries=20, wait=3):
+    for _ in range(tries):
+        r, err = canva_authed("GET", get_path, m)
+        if err:
+            return None, err
+        st = (r.get("job") or {}).get("status")
+        if st == "success":
+            return r["job"], None
+        if st == "failed":
+            return None, {"error": "Canva job failed: " + json.dumps(r.get("job"))[:300]}
+        time.sleep(wait)
+    return None, {"error": "Canva job still running — try again in a bit"}
+
+def tool_canva_export(args: dict):
+    m = load_mem()
+    raw = (args.get("design") or "").strip()
+    fmt = (args.get("format") or "pdf").strip().lower()
+    if fmt not in ("pdf", "png", "jpg"):
+        return json.dumps({"error": "format must be pdf, png or jpg"})
+    mid = _re.search(r"/design/([A-Za-z0-9_-]+)", raw)
+    did = (mid.group(1) if mid else raw)[:100]
+    if not did:
+        return json.dumps({"error": "give me the Canva design link or ID"})
+    body = {"design_id": did, "format": {"type": fmt}}
+    if fmt == "pdf":
+        body["format"]["size"] = "a4"
+    r, err = canva_authed("POST", "/exports", m, body)
+    if err:
+        return json.dumps(err)
+    job, err = canva_poll("/exports/" + r["job"]["id"], m)
+    if err:
+        return json.dumps(err)
+    urls = job.get("urls", [])
+    if not urls:
+        return json.dumps({"error": "export finished but no download link came back"})
+    updir = DATA_DIR / "uploads"
+    updir.mkdir(exist_ok=True)
+    saved = []
+    for i, u in enumerate(urls[:10]):
+        try:
+            req = _urlreq.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+            data = _urlreq.urlopen(req, timeout=120).read()
+            fname = datetime.now().strftime("%Y%m%d-%H%M%S") + f"-canva-{i}.{fmt}"
+            (updir / fname).write_bytes(data)
+            saved.append(fname)
+        except Exception as e:
+            return json.dumps({"error": "download failed: " + str(e)[:150]})
+    m2 = load_mem()
+    for fname in saved:
+        m2["facts"].append({"type": "file", "name": fname, "saved_as": fname,
+                            "at": datetime.now().isoformat(),
+                            "text": "Exported from Canva design " + did})
+    save_mem(m2)
+    links = ", ".join("/api/file/" + f for f in saved)
+    return json.dumps({"ok": True, "file_url": "/api/file/" + saved[0], "all_files": links,
+                       "note": "Exported from their Canva. Share the file link(s) with the user."})
+
+def tool_canva_autofill(args: dict):
+    m = load_mem()
+    tid = (args.get("template_id") or "").strip()[:200]
+    did = (args.get("design_id") or "").strip()[:200]
+    if not tid and not did:
+        return json.dumps({"error": "give me a brand template ID or a design ID/URL from their Canva"})
+    fields = args.get("fields") or {}
+    if isinstance(fields, str):
+        try:
+            fields = json.loads(fields)
+        except Exception:
+            return json.dumps({"error": 'fields must be JSON like {"Title": "My Text"}'})
+    data = {k: {"type": "text", "text": str(v)[:1000]} for k, v in fields.items()}
+    title = (args.get("title") or "").strip()[:200]
+    if tid:
+        body = {"type": "create_from_brand_template", "brand_template_id": tid, "data": data}
+    else:
+        mid = _re.search(r"/design/([A-Za-z0-9_-]+)", did)
+        body = {"type": "create_from_design", "design_id": (mid.group(1) if mid else did), "data": data}
+    if title:
+        body["title"] = title
+    r, err = canva_authed("POST", "/autofills", m, body)
+    if err:
+        return json.dumps(err)
+    job, err = canva_poll("/autofills/" + r["job"]["id"], m, tries=25, wait=4)
+    if err:
+        return json.dumps(err)
+    d = job.get("design") or {}
+    url = d.get("url", "")
+    return json.dumps({"ok": True, "design_id": d.get("id", ""), "design_url": url,
+                       "note": "Canva design created" + ("" if not url else " at " + url) +
+                               ". Offer to export it as PDF/PNG with canva_export."})
+
 def tool_save_insight(args: dict):
     t = (args.get("text") or "").strip()[:500]
     if t:
@@ -503,7 +694,8 @@ def tool_edit_image(args: dict):
         return json.dumps({"error": "edit failed: " + str(e)[:200]})
 
 TOOL_HANDLERS.update({"make_image": tool_make_image, "make_pdf": tool_make_pdf,
-                      "edit_image": tool_edit_image})
+                      "edit_image": tool_edit_image, "canva_export": tool_canva_export,
+                      "canva_autofill": tool_canva_autofill})
 
 LOCAL_PC = os.getenv("LOCAL_PC", "") == "1"
 PC_PENDING = {}
@@ -752,6 +944,20 @@ TOOLS = [
             "name": {"type": "string", "description": "saved image file name"},
             "caption": {"type": "string", "description": "text to add (optional)"},
             "width": {"type": "integer", "description": "new width px (optional)"}}}, "required": ["name"]}},
+    {"type": "function", "function": {
+        "name": "canva_export",
+        "description": "Export one of the user's Canva designs (by link or ID) as PDF/PNG/JPG and send them the download link. Only works after they connect Canva.",
+        "parameters": {"type": "object", "properties": {
+            "design": {"type": "string", "description": "Canva design link or ID"},
+            "format": {"type": "string", "description": "pdf, png or jpg"}}}, "required": ["design"]}},
+    {"type": "function", "function": {
+        "name": "canva_autofill",
+        "description": "Create a real Canva design from their brand template or design by filling text fields, then offer to export it. Needs a template/design ID and their Canva connected. Note: autofill needs their Canva Pro/Teams.",
+        "parameters": {"type": "object", "properties": {
+            "template_id": {"type": "string", "description": "brand template ID (if using a template)"},
+            "design_id": {"type": "string", "description": "design ID/URL (if copying a design)"},
+            "title": {"type": "string", "description": "title for the new design"},
+            "fields": {"type": "string", "description": "JSON like {\"Headline\": \"Hello\", \"Body\": \"text\"}"}}}}},
 ]
 
 if LOCAL_PC:
@@ -843,11 +1049,11 @@ def upcoming_reminders(m):
 def unseen_insights(m):
     return [x for x in m.get("insights", []) if not x.get("seen")]
 
-LIMIT_KEYS = ("web_search", "browse_page", "pc", "insights", "reminders")
+LIMIT_KEYS = ("web_search", "browse_page", "pc", "insights", "reminders", "canva")
 
 def get_limits(m):
     lim = {"web_search": True, "browse_page": True, "pc": True,
-           "insights": True, "reminders": True}
+           "insights": True, "reminders": True, "canva": True}
     lim.update(m.get("profile", {}).get("limits", {}) or {})
     return lim
 
@@ -863,6 +1069,8 @@ def allowed_tools(m):
         if n == "save_insight" and not lim["insights"]:
             continue
         if n.startswith(("pc_", "chrome_")) and not (LOCAL_PC and lim["pc"]):
+            continue
+        if n.startswith("canva_") and not lim["canva"]:
             continue
         out.append(t)
     return out
@@ -924,6 +1132,10 @@ def build_system(m):
     off = [k for k in LIMIT_KEYS if not lim.get(k)]
     disabled_text = ("\nABILITIES TURNED OFF BY USER — never use or offer these: " + ", ".join(off)) if off else ""
     tools_now = allowed_tools(m)
+    canva_on = bool((m.get("canva") or {}).get("refresh_token"))
+    canva_text = ("\nCANVA: connected — use canva_export/canva_autofill for their real Canva designs."
+                  if canva_on else
+                  "\nCANVA: not connected — if they ask about Canva, tell them to tap the Canva button and approve.")
     system = f"""You are Personal Guide, a sharp friend who manages the user's life over text. Reply in ONE short message (1-3 sentences), contractions, no essays and no bullet lists unless asked. Only use /// to split into two texts on rare occasions when there are genuinely two separate thoughts.
 Your name is Personal Guide. When asked who you are, say you are Personal Guide, their personal guide.
 Current local time: {now.strftime("%Y-%m-%d %H:%M (%A)")}.
@@ -938,7 +1150,7 @@ Rules:
 2. One concrete next action max, never lectures.
 3. One short question max when the goal is vague.
 4. ONE message by default. Detail only when asked.
-5. Never use emojis anywhere in replies — plain refined text only.{rules_text}{disabled_text}"""
+5. Never use emojis anywhere in replies — plain refined text only.{rules_text}{disabled_text}{canva_text}"""
     return system, profile, lim, tools_now
 
 class _TurnError(Exception):

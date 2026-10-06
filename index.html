@@ -62,6 +62,7 @@ input[type=file]{display:none}
 <button onclick="snap()">◎ Camera</button>
 <button onclick="openSettings()" title="Change brain: model + API key">Brain</button>
 <button onclick="openRules()" title="Personality, rules and limits">Rules</button>
+<button id="canvabtn" onclick="canvaGo()" title="Connect your Canva account">Canva</button>
 <button onclick="clearChat()" title="Delete all chat">✕ Clear</button>
 <button onclick="logout()" title="Lock">Lock</button>
 <label class="attach" for="f" title="Text files and images only">＋ Attach</label>
@@ -387,7 +388,7 @@ async function testSettings(){
   const r=await api('/api/ping'); const j=await r.json();
   document.getElementById('setmsg').textContent=j.ok?('✓ '+j.model+' replied: '+j.reply):('Note: '+(j.error||'failed'));
 }
-const LIMDEF=[["web_search","Live web search"],["browse_page","Open pages in Chrome"],["pc","Laptop control (local only)"],["insights","Share finds unprompted"],["reminders","Reminders + check-ins"]];
+const LIMDEF=[["web_search","Live web search"],["browse_page","Open pages in Chrome"],["pc","Laptop control (local only)"],["insights","Share finds unprompted"],["reminders","Reminders + check-ins"],["canva","Canva designs"]];
 async function openRules(){
   const r=await api('/api/rules'); const j=await r.json();
   document.getElementById('rulerules').value=j.rules||'';
@@ -406,6 +407,22 @@ async function saveRules(){
   const r=await api('/api/rules',{method:'POST',body:JSON.stringify({rules:document.getElementById('rulerules').value,limits:lim})});
   const j=await r.json();
   document.getElementById('rulemsg').textContent=j.error?('Note: '+j.error):'Saved — he follows these from the next message.';
+}
+async function canvaGo(){
+  try{
+    const r=await api('/api/canva/status'); const j=await r.json();
+    if(j.error){ bubble('e'+Date.now(),'bot','Note: '+j.error); return; }
+    if(!j.app_ready){ bubble('c'+Date.now(),'bot','Canva app keys are not set up yet — I need a Client ID first.'); return; }
+    if(j.connected){ bubble('c'+Date.now(),'bot','Canva is connected. Send me a design link and tell me what to make of it.'); loadNudges(); return; }
+    window.open('/api/canva/login?pw='+encodeURIComponent(pw()),'_blank');
+    bubble('c'+Date.now(),'bot','A Canva tab opened — approve access there, then tap Canva again.');
+  }catch(e){ if(e.message!=='locked') bubble('e'+Date.now(),'bot','Note: Canva check failed. Try again.'); }
+}
+async function canvaMark(){
+  try{
+    const r=await api('/api/canva/status'); const j=await r.json();
+    const b=document.getElementById('canvabtn'); if(b&&j.connected)b.textContent='Canva ✓';
+  }catch(e){}
 }
 function closeRules(){ document.getElementById('rulesmodal').style.display='none'; }
 function closeSettings(){ document.getElementById('settings').style.display='none'; }
@@ -567,6 +584,7 @@ loadHistory();
 refreshModelLabel();
 loadNudges();
 loadPc();
+canvaMark();
 document.getElementById('host').textContent=location.host.includes('localhost')?'Laptop':'Cloud';
 setInterval(loadNudges, 60000);
 setInterval(loadPc, 5000);
