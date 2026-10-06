@@ -238,7 +238,7 @@ async function send(){
     }
     // live token rendering
     const reader=r2.body.getReader(), dec=new TextDecoder();
-    let buf='', liveNode=null, full='', learned=null, streamErr=null, gotDone=false;
+    let buf='', liveNode=null, full='', learned=null, streamErr=null, gotDone=false, sawTokens=false;
     const ensureLive=()=>{
       if(!liveNode){
         document.getElementById('typing')?.remove();
@@ -258,6 +258,7 @@ async function send(){
         if(!line.startsWith('data:'))continue;
         let e; try{ e=JSON.parse(line.slice(5)); }catch(_){ continue; }
         if(e.t){
+          sawTokens=true;
           const n=ensureLive();
           if(n.dataset.st){ n.textContent=''; delete n.dataset.st; }
           n.textContent=(n.textContent||'')+e.t; full+=e.t; maybePin();
@@ -271,6 +272,17 @@ async function send(){
     document.getElementById('typing')?.remove();
     if(streamErr||!gotDone){ throw new Error(streamErr||'stream cut off'); }
     lastReply=(full||'').replaceAll('///',' ');
+    if(!sawTokens&&full){
+      // provider sent the whole reply at once: reveal it progressively like live typing
+      const n=ensureLive();
+      const words=full.split(/(\s+)/);
+      n.textContent='';
+      for(let i=0;i<words.length;i+=3){
+        n.textContent+=words.slice(i,i+3).join('');
+        maybePin();
+        await new Promise(r=>setTimeout(r,28));
+      }
+    }
     await loadHistory();
     loadNudges();
     if(learned){ bubble('l'+Date.now(),'bot','✓ '+learned); }
