@@ -40,24 +40,24 @@ small{color:#5b6b86}
 input[type=file]{display:none}
 </style></head><body>
 <div id="login" style="display:none"><div>
-<b>✨ Personal Guide</b><small>Enter password</small>
+<b>✦ Personal Guide</b><small>Enter password</small>
 <input id="pw" type="password" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin()">
 <button onclick="doLogin()">Unlock</button>
 <small id="loginerr" style="color:#f66"></small>
 </div></div>
-<header><b>✨ Personal Guide</b><small id="status">life manager</small><small id="model"></small><span id="host"></span>
+<header><b>✦ Personal Guide</b><small id="status">life manager</small><small id="model"></small><span id="host"></span>
 <span style="flex:1"></span>
 <button onclick="saveProfile()">Save profile</button>
-<button onclick="toggleVoice()">🎤 Voice</button>
-<button onclick="snap()">📷 Camera</button>
-<button onclick="openSettings()" title="Change brain: model + API key">⚙️ Brain</button>
-<button onclick="clearChat()" title="Delete all chat">🗑️ Clear</button>
-<button onclick="logout()" title="Lock">🔒 Lock</button>
-<label class="attach" for="f" title="Text files and images only">📎 Attach</label>
+<button onclick="toggleVoice()">◉ Voice</button>
+<button onclick="snap()">◎ Camera</button>
+<button onclick="openSettings()" title="Change brain: model + API key">Brain</button>
+<button onclick="clearChat()" title="Delete all chat">✕ Clear</button>
+<button onclick="logout()" title="Lock">Lock</button>
+<label class="attach" for="f" title="Text files and images only">＋ Attach</label>
 <input type="file" id="f" accept=".txt,.md,.csv,.json,.png,.jpg,.jpeg,.webp" onchange="stageFile()"></header>
 <div id="settings" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:98;align-items:center;justify-content:center">
 <div style="background:#171a21;padding:20px;border-radius:12px;display:flex;flex-direction:column;gap:10px;width:min(420px,92vw);max-height:88vh;overflow:auto">
-<b>⚙️ Brain settings</b>
+<b>Brain settings</b>
 <small>Using now: <b id="curmodel"></b> (<span id="curkey"></span>)</small>
 <label><small>Choose brain</small><br><select id="setmodel" onchange="showFeatures()" style="width:100%"></select></label>
 <label id="customwrap" style="display:none"><small>Custom model id (exact id from the provider)</small><br><input id="setcustom" style="width:100%" placeholder="e.g. deepseek/deepseek-chat:free"></label>
@@ -69,7 +69,7 @@ input[type=file]{display:none}
 <small id="setmsg"></small>
 <hr style="border-color:#333;width:100%">
 <small><b>Move Personal Guide to another device / cloud:</b></small>
-<div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="exportMem()">⬇️ Export memory</button><button onclick="document.getElementById('impfile').click()">⬆️ Import memory</button>
+<div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="exportMem()">Export memory</button><button onclick="document.getElementById('impfile').click()">Import memory</button>
 <input type="file" id="impfile" accept=".json" style="display:none" onchange="importMem()"></div>
 </div></div>
 <div id="chat"></div>
@@ -78,7 +78,7 @@ input[type=file]{display:none}
 <div id="stage" style="display:none;gap:8px;padding:8px 12px;background:#171a21;border-top:1px solid #222;align-items:center"><span id="stagename"></span><button onclick="clearStaged()">✕</button></div>
 <div id="bar"><input id="in" placeholder="Ask your Personal Guide..." onkeydown="if(event.key==='Enter')send()">
 <button id="sendbtn" onclick="send()">Send</button>
-<button onclick="speakLast()">🔊 Speak</button></div>
+<button onclick="speakLast()">Speak</button></div>
 <video id="cam" style="display:none" autoplay playsinline width="320"></video>
 <canvas id="cv" style="display:none"></canvas>
 <script>
@@ -99,7 +99,7 @@ function bubble(id, who, text, at){
   const t=document.createElement('div'); t.textContent=text; d.appendChild(t);
   const w=fmtTime(at); if(w){ const s=document.createElement('div'); s.className='when'; s.textContent=w; d.appendChild(s); }
   const tools=document.createElement('div'); tools.className='tools';
-  tools.innerHTML='<span title="Edit">✏️ edit</span><span title="Delete">🗑️ delete</span>';
+  tools.innerHTML='<span title="Edit">Edit</span><span title="Delete">Delete</span>';
   tools.children[0].onclick=()=>editMsg(id, text);
   tools.children[1].onclick=()=>delMsg(id);
   d.appendChild(tools);
@@ -119,7 +119,7 @@ async function loadHistory(){
     }
     renderMsgs(50);
     if(j.profile && j.profile.name) document.getElementById('status').textContent='chat + memory ('+j.profile.name+')';
-  }catch(e){ if(e.message!=='locked') bubble('err','bot','⚠️ Cannot load: '+e.message); }
+  }catch(e){ if(e.message!=='locked') bubble('err','bot','Note: Cannot load: '+e.message); }
 }
 function addBot(text, at){
   // Personal Guide double-texts: /// splits one reply into consecutive bubbles
@@ -148,12 +148,12 @@ function clearStaged(){ staged=null; img=null; document.getElementById('f').valu
 async function stageFile(){
   const f=document.getElementById('f').files[0]; if(!f)return;
   const ok=/\.(txt|md|csv|json|png|jpg|jpeg|webp)$/i.test(f.name);
-  if(!ok){ bubble('f'+Date.now(),'bot','⚠️ That file type is not supported yet. I can read text files (.txt, .md, .csv, .json) and see images (.png, .jpg, .webp).'); document.getElementById('f').value=''; return; }
+  if(!ok){ bubble('f'+Date.now(),'bot','Note: That file type is not supported yet. I can read text files (.txt, .md, .csv, .json) and see images (.png, .jpg, .webp).'); document.getElementById('f').value=''; return; }
   if(/\.(png|jpg|jpeg|webp)$/i.test(f.name)){
     const rd=new FileReader();
-    rd.onload=()=>{ staged={kind:'image',dataUrl:rd.result,file:f}; img=rd.result; stageChip('📎 '+f.name+' — write a message and Send'); };
+    rd.onload=()=>{ staged={kind:'image',dataUrl:rd.result,file:f}; img=rd.result; stageChip(f.name+' — write a message and Send'); };
     rd.readAsDataURL(f);
-  } else { staged={kind:'file',file:f}; stageChip('📎 '+f.name+' — write a message and Send'); }
+  } else { staged={kind:'file',file:f}; stageChip(f.name+' — write a message and Send'); }
 }
 let sending=false;
 async function send(){
@@ -163,7 +163,7 @@ async function send(){
   sending=true; document.getElementById('sendbtn').disabled=true;
   document.getElementById('in').value='';
   const draft=t;
-  const mine=t||(staged?'📎 '+staged.file.name:'[image]');
+  const mine=t||(staged?'Attached: '+staged.file.name:'[image]');
   const optNode=bubble('tmp'+Date.now(),'me',mine,new Date().toISOString());
   const tp=document.createElement('div'); tp.className='msg bot typing'; tp.id='typing'; tp.innerHTML='<i>●</i> <i>●</i> <i>●</i>';
   document.getElementById('chat').appendChild(tp); tp.scrollIntoView({block:'nearest'});
@@ -181,20 +181,20 @@ async function send(){
       const fd=new FormData(); fd.append('file',staged.file);
       const r=await api('/api/upload',{method:'POST',body:fd,headers:pw()?{'x-app-password':pw()}:{}});
       const j=await r.json();
-      if(j.error){ bubble('e'+Date.now(),'bot','⚠️ '+j.error); return; }
+      if(j.error){ bubble('e'+Date.now(),'bot','Note: '+j.error); return; }
       msg=(t?t+'\n\n':'')+'[Attached file '+staged.file.name+']\n'+(j.extract||'saved');
     }
     const r2=await api('/api/chat',{method:'POST',body:JSON.stringify({message:msg,image_b64:b64})});
     const j2=await r2.json(); clearStaged();
     document.getElementById('typing').remove();
-    if(j2.error){ optNode.remove(); document.getElementById('in').value=draft; bubble('e'+Date.now(),'bot','⚠️ '+j2.error+' — your message is back in the box, hit Send to retry.'); done(); return; }
+    if(j2.error){ optNode.remove(); document.getElementById('in').value=draft; bubble('e'+Date.now(),'bot','Note: '+j2.error+' — your message is back in the box, hit Send to retry.'); done(); return; }
     lastReply=(j2.reply||'').replaceAll('///',' ');
     addBot(j2.reply);
     await loadHistory();
     loadNudges();
-    if(j2.learned){ bubble('l'+Date.now(),'bot','✅ '+j2.learned); }
+    if(j2.learned){ bubble('l'+Date.now(),'bot','✓ '+j2.learned); }
     done();
-  }catch(e){ document.getElementById('typing')?.remove(); optNode.remove(); document.getElementById('in').value=draft; if(e.message!=='locked') bubble('e'+Date.now(),'bot','⚠️ Send failed (connection?). Your message is back in the box — hit Send to retry.'); done(); }
+  }catch(e){ document.getElementById('typing')?.remove(); optNode.remove(); document.getElementById('in').value=draft; if(e.message!=='locked') bubble('e'+Date.now(),'bot','Note: Send failed (connection?). Your message is back in the box — hit Send to retry.'); done(); }
 }
 async function editMsg(id, old){
   const v=prompt('Edit message:', old); if(v===null||v===old)return;
@@ -202,14 +202,14 @@ async function editMsg(id, old){
   loadHistory();
 }
 let CAT=[];
-async function refreshModelLabel(){ try{ const r=await api('/api/settings'); const j=await r.json(); document.getElementById('model').textContent='🧠 '+j.model; }catch(e){} }
+async function refreshModelLabel(){ try{ const r=await api('/api/settings'); const j=await r.json(); document.getElementById('model').textContent=j.model; }catch(e){} }
 async function openSettings(){
   const r=await api('/api/settings'); const j=await r.json(); CAT=j.catalog;
   document.getElementById('curmodel').textContent=j.model;
   document.getElementById('curkey').textContent='key '+j.key_preview;
   const s=document.getElementById('setmodel'); s.innerHTML='';
   CAT.forEach(e=>{ const o=document.createElement('option'); o.value=e.id; o.textContent=e.label+((e.env_key&&!e.has_key)?' (needs key)':''); if(e.id===j.model)o.selected=true; s.appendChild(o); });
-  const oc=document.createElement('option'); oc.value='__custom'; oc.textContent='✏️ Custom model id...'; s.appendChild(oc);
+  const oc=document.createElement('option'); oc.value='__custom'; oc.textContent=' Custom model id...'; s.appendChild(oc);
   if(!CAT.some(e=>e.id===j.model)){ s.value='__custom'; document.getElementById('setcustom').value=j.model; }
   document.getElementById('seturl').value=j.base_url;
   document.getElementById('setkey').value='';
@@ -223,22 +223,22 @@ function showFeatures(){
   if(v==='__custom'){ document.getElementById('feat').innerHTML='Type the exact model id. Keep the right server address below, paste the key, then Test.'; document.getElementById('keysrc').textContent=''; return; }
   const e=CAT.find(x=>x.id===v); if(!e)return;
   document.getElementById('seturl').value=e.base_url;
-  document.getElementById('feat').innerHTML='✅ '+e.features.join('<br>✅ ')+(e.limits?'<br>⛽ <b>Limits:</b> '+e.limits:'');
+  document.getElementById('feat').innerHTML='✓ '+e.features.join('<br>✓ ')+(e.limits?'<br><b>Limits:</b> '+e.limits:'');
   document.getElementById('keysrc').textContent=e.key_from?('Get key: '+e.key_from):'No key needed.';
 }
 async function saveSettings(){
   let m=document.getElementById('setmodel').value;
-  if(m==='__custom'){ m=document.getElementById('setcustom').value.trim(); if(!m){ document.getElementById('setmsg').textContent='⚠️ Type a custom model id first.'; return; } }
+  if(m==='__custom'){ m=document.getElementById('setcustom').value.trim(); if(!m){ document.getElementById('setmsg').textContent='Note: Type a custom model id first.'; return; } }
   const body={model:m, base_url:document.getElementById('seturl').value};
   const k=document.getElementById('setkey').value.trim(); if(k)body.api_key=k;
   const r=await api('/api/settings',{method:'POST',body:JSON.stringify(body)}); const j=await r.json();
-  document.getElementById('setmsg').textContent=j.error?('⚠️ '+j.error):('✅ Now using '+j.model+' ('+j.key_preview+')');
+  document.getElementById('setmsg').textContent=j.error?('Note: '+j.error):('✓ Now using '+j.model+' ('+j.key_preview+')');
   if(!j.error){ document.getElementById('curmodel').textContent=j.model; document.getElementById('curkey').textContent='key '+j.key_preview; refreshModelLabel(); }
 }
 async function testSettings(){
   document.getElementById('setmsg').textContent='Testing...';
   const r=await api('/api/ping'); const j=await r.json();
-  document.getElementById('setmsg').textContent=j.ok?('✅ '+j.model+' replied: '+j.reply):('⚠️ '+(j.error||'failed'));
+  document.getElementById('setmsg').textContent=j.ok?('✓ '+j.model+' replied: '+j.reply):('Note: '+(j.error||'failed'));
 }
 function closeSettings(){ document.getElementById('settings').style.display='none'; }
 async function loadNudges(){
@@ -254,12 +254,12 @@ async function loadNudges(){
       const d=document.createElement('div');
       d.style.cssText='background:#1e222c;padding:8px 10px;border-radius:10px;font-size:14px';
       if(x.kind==='due'){
-        d.innerHTML='⏰ <b>'+escapeHtml(x.text)+'</b> <small>— you locked in?</small><br>';
-        d.appendChild(nbtn('✅ Done',()=>nudgeDone(x.id)));
-        d.appendChild(nbtn('😴 30m',()=>nudgeSnooze(x.id,30)));
-        d.appendChild(nbtn('🗑️',()=>nudgeDel(x.id)));
+        d.innerHTML='◷ <b>'+escapeHtml(x.text)+'</b> <small>— you locked in?</small><br>';
+        d.appendChild(nbtn('Done',()=>nudgeDone(x.id)));
+        d.appendChild(nbtn('Snooze',()=>nudgeSnooze(x.id,30)));
+        d.appendChild(nbtn('Remove',()=>nudgeDel(x.id)));
       } else {
-        d.innerHTML='💡 '+escapeHtml(x.text)+'<br>';
+        d.innerHTML='✦ '+escapeHtml(x.text)+'<br>';
         d.appendChild(nbtn('Got it',()=>nudgeDone(x.id)));
       }
       box.appendChild(d);
@@ -280,12 +280,12 @@ async function loadPc(){
     j.pending.forEach(p=>{
       const d=document.createElement('div');
       d.style.cssText='background:#2a2118;border:1px solid #a80;padding:8px 10px;border-radius:10px;font-size:14px';
-      const what=p.action==='open'?'🖥️ Open <b>'+escapeHtml(p.target)+'</b>'
-        :p.action==='run'?'⌨️ Run <b>'+escapeHtml((p.command||'').slice(0,200))+'</b>'
-        :'📝 Write <b>'+escapeHtml(p.path||'')+'</b>';
+      const what=p.action==='open'?'Open <b>'+escapeHtml(p.target)+'</b>'
+        :p.action==='run'?'Run <b>'+escapeHtml((p.command||'').slice(0,200))+'</b>'
+        :'Write <b>'+escapeHtml(p.path||'')+'</b>';
       d.innerHTML=what+'<br><small>Personal Guide wants to do this on your laptop:</small><br>';
-      d.appendChild(nbtn('✅ Approve',()=>pcDecide(p.id,true,what)));
-      d.appendChild(nbtn('❌ Deny',()=>pcDecide(p.id,false,what)));
+      d.appendChild(nbtn('Approve',()=>pcDecide(p.id,true,what)));
+      d.appendChild(nbtn('Deny',()=>pcDecide(p.id,false,what)));
       box.appendChild(d);
     });
   }catch(e){}
@@ -294,8 +294,8 @@ async function pcDecide(id, ok, what){
   const r=await api('/api/pc/decide',{method:'POST',body:JSON.stringify({id,approve:ok})});
   const j=await r.json(); loadPc();
   if(!ok){ bubble('d'+Date.now(),'bot','Okay, skipped it.'); return; }
-  if(j.error){ bubble('e'+Date.now(),'bot','⚠️ '+j.error); return; }
-  bubble('r'+Date.now(),'bot','✅ '+j.summary+'\n'+String(j.result||'').slice(0,500));
+  if(j.error){ bubble('e'+Date.now(),'bot','Note: '+j.error); return; }
+  bubble('r'+Date.now(),'bot','✓ '+j.summary+'\n'+String(j.result||'').slice(0,500));
   try{
     const r2=await api('/api/chat',{method:'POST',body:JSON.stringify({message:'System note, do not act on tools: my PC action "'+j.summary+'" finished with result: '+String(j.result||'').slice(0,800)+'. React in one short line.'})});
     const j2=await r2.json(); lastReply=(j2.reply||'').replaceAll('///',' ');
@@ -305,14 +305,14 @@ async function pcDecide(id, ok, what){
 async function exportMem(){
   const r=await api('/api/export'); const b=await r.blob();
   const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='personal-guide-memory.json'; a.click();
-  document.getElementById('setmsg').textContent='✅ Memory downloaded. Import it on the new device.';
+  document.getElementById('setmsg').textContent='✓ Memory downloaded. Import it on the new device.';
 }
 async function importMem(){
   const f=document.getElementById('impfile').files[0]; if(!f)return;
   const fd=new FormData(); fd.append('file',f);
   const r=await api('/api/import',{method:'POST',body:fd,headers:pw()?{'x-app-password':pw()}:{}});
   const j=await r.json();
-  document.getElementById('setmsg').textContent=j.error?('⚠️ '+j.error):('✅ Imported '+j.messages+' messages, '+j.facts+' facts.');
+  document.getElementById('setmsg').textContent=j.error?('Note: '+j.error):('✓ Imported '+j.messages+' messages, '+j.facts+' facts.');
   document.getElementById('impfile').value='';
   loadHistory();
 }
@@ -321,7 +321,7 @@ async function clearChat(){ if(!confirm('Delete ALL chat history? Memory facts s
 async function saveProfile(){
   const name=prompt('Your name?'); const goals=prompt('Your #1 goal?');
   await api('/api/profile',{method:'POST',body:JSON.stringify({name,goals:goals?[goals]:[]})});
-  bubble('p'+Date.now(),'bot','✅ Profile saved.'); loadHistory();
+  bubble('p'+Date.now(),'bot','✓ Profile saved.'); loadHistory();
 }
 function toggleVoice(){
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
@@ -341,14 +341,14 @@ async function snap(){
     const shot=c.toDataURL('image/jpeg',0.8);
     staged={kind:'image',dataUrl:shot,file:null}; img=shot;
     s.getTracks().forEach(t=>t.stop()); v.style.display='none';
-    stageChip('📷 Captured — write a message and Send.');
+    stageChip('Photo captured — write a message and Send.');
   },2500);
 }
 loadHistory();
 refreshModelLabel();
 loadNudges();
 loadPc();
-document.getElementById('host').textContent=location.host.includes('localhost')?'🏠 laptop':'☁️ cloud';
+document.getElementById('host').textContent=location.host.includes('localhost')?'Laptop':'Cloud';
 setInterval(loadNudges, 60000);
 setInterval(loadPc, 5000);
 </script></body></html>

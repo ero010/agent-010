@@ -714,7 +714,8 @@ Rules:
 1. If user shares a durable fact (name, goal, habit, preference), acknowledge it briefly and it will be auto-saved.
 2. One concrete next action max, never lectures.
 3. One short question max when the goal is vague.
-4. ONE message by default. Detail only when asked."""
+4. ONE message by default. Detail only when asked.
+5. Never use emojis anywhere in replies — plain refined text only."""
 
     # auto-learn simple facts: "my name is X", "my goal is Y"
     msg_low = inp.message.lower()
@@ -746,13 +747,22 @@ Rules:
                                                   "due": due.isoformat(), "repeat": repeat,
                                                   "done": False, "at": datetime.now().isoformat()})
             learned = (learned + " " if learned else "") + \
-                f"⏰ Got it — I'll check on you: {task} ({due.strftime('%a %H:%M')})."
+                f"Reminder set — I'll check on you: {task} ({due.strftime('%a %H:%M')})."
         elif not learned:
             learned = "When should I check on you? (e.g. at 8pm, tomorrow 9am, in 30 min, friday)"
 
+    # SAVE THE USER'S MESSAGE FIRST — before the brain even runs — so a failed
+    # reply, refresh or closed tab can never lose what they wrote.
+    m.setdefault("conversations", []).append({"id": uuid.uuid4().hex[:8], "role": "user",
+                                              "content": inp.message[:2000], "at": datetime.now().isoformat()})
+    m["profile"] = profile
+    if learned and learned not in [f.get("text", "") for f in m["facts"][-5:]]:
+        m["facts"].append({"type": "auto", "at": datetime.now().isoformat(), "text": inp.message[:500]})
+    save_mem(m)
+
     NO_VISION = ("llama-3.3-70b-versatile", "llama3.1", "openai/gpt-oss-120b", "openai/gpt-oss-20b")
     if inp.image_b64 and MODEL in NO_VISION:
-        return JSONResponse({"error": "This brain (Llama) cannot see images. For photo questions, switch to Gemini or GPT in ⚙️ Brain, then ask again."}, status_code=400)
+        return JSONResponse({"error": "This brain cannot see images. For photo questions, switch to Gemini or GPT in Brain settings, then ask again."}, status_code=400)
 
     # FULL history as context: read everything before answering.
     # Safety budget only matters at huge scale (400k chars ≈ 100k tokens, inside 1M context).
@@ -780,15 +790,10 @@ Rules:
     except Exception as e:
         return JSONResponse({"error": f"AI call failed: {e}. Check AI_MODEL/BASE_URL/KEY."}, status_code=500)
 
-    m.setdefault("conversations", []).append({"id": uuid.uuid4().hex[:8], "role": "user",
-                                              "content": inp.message[:2000], "at": datetime.now().isoformat()})
     m["conversations"].append({"id": uuid.uuid4().hex[:8], "role": "assistant",
                                "content": (reply or "")[:4000], "at": datetime.now().isoformat()})
     # no truncation — everything is remembered in memory.json
     m["profile"] = profile
-    # also persist learned facts as list
-    if learned and learned not in [f.get("text","") for f in m["facts"][-5:]]:
-        m["facts"].append({"type": "auto", "at": datetime.now().isoformat(), "text": inp.message[:500]})
     # persist insights the brain stashed via save_insight
     global _pending_insights
     for t in _pending_insights:
