@@ -7,7 +7,8 @@ vol = modal.Volume.from_name("agent010-data", create_if_missing=True)
 
 image = (
     modal.Image.debian_slim()
-    .pip_install("fastapi", "uvicorn", "python-multipart", "openai", "pydantic")
+    .pip_install("fastapi", "uvicorn", "python-multipart", "openai", "pydantic",
+                 "fpdf2==2.8.8", "pillow==12.3.0")
     .add_local_file("backend.py", "/app/backend.py")
     .add_local_file("index.html", "/app/index.html")
 )
