@@ -120,9 +120,11 @@ function bubble(id, who, text, at){
   const t=document.createElement('div'); t.textContent=text; d.appendChild(t);
   const w=fmtTime(at); if(w){ const s=document.createElement('div'); s.className='when'; s.textContent=w; d.appendChild(s); }
   const tools=document.createElement('div'); tools.className='tools';
-  tools.innerHTML='<span title="Edit">Edit</span><span title="Delete">Delete</span>';
-  tools.children[0].onclick=()=>editMsg(id, text, who);
-  tools.children[1].onclick=()=>delMsg(id, who);
+  if(who==='me'){
+    tools.innerHTML='<span title="Edit">Edit</span><span title="Delete">Delete</span>';
+    tools.children[0].onclick=()=>editMsg(id, text, who);
+    tools.children[1].onclick=()=>delMsg(id, who);
+  } else { tools.style.display='none'; }
   d.appendChild(tools);
   document.getElementById('chat').appendChild(d);
   maybePin();
@@ -216,25 +218,76 @@ async function send(){
       if(j.error){ bubble('e'+Date.now(),'bot','Note: '+j.error); return; }
       msg=(t?t+'\n\n':'')+'[Attached file '+staged.file.name+']\n'+(j.extract||'saved');
     }
-    const r2=await api('/api/chat',{method:'POST',body:JSON.stringify({message:msg,image_b64:b64})});
-    const j2=await r2.json(); clearStaged();
-    document.getElementById('typing').remove();
-    if(j2.error){ optNode.remove(); document.getElementById('in').value=draft; bubble('e'+Date.now(),'bot','Note: '+j2.error+' — your message is back in the box, hit Send to retry.'); done(); return; }
-    lastReply=(j2.reply||'').replaceAll('///',' ');
-    addBot(j2.reply);
+    let r2;
+    try{
+      r2=await fetch('/api/chat/stream',{method:'POST',headers:headers(true),body:JSON.stringify({message:msg,image_b64:b64})});
+    }catch(e){ throw new Error('connection'); }
+    if(r2.status===401){ document.getElementById('login').style.display='flex'; throw new Error('locked'); }
+    if(!r2.ok||!r2.body){
+      // fallback: classic non-streaming reply (older server)
+      const j2=await r2.json().catch(()=>({error:'stream unavailable'}));
+      clearStaged();
+      document.getElementById('typing')?.remove();
+      if(j2.error){ optNode.remove(); document.getElementById('in').value=draft; bubble('e'+Date.now(),'bot','Note: '+j2.error+' — your message is back in the box, hit Send to retry.'); done(); return; }
+      lastReply=(j2.reply||'').replaceAll('///',' ');
+      addBot(j2.reply);
+      await loadHistory();
+      loadNudges();
+      if(j2.learned){ bubble('l'+Date.now(),'bot','✓ '+j2.learned); }
+      done(); return;
+    }
+    // live token rendering
+    const reader=r2.body.getReader(), dec=new TextDecoder();
+    let buf='', liveNode=null, full='', learned=null, streamErr=null, gotDone=false;
+    const ensureLive=()=>{
+      if(!liveNode){
+        document.getElementById('typing')?.remove();
+        liveNode=document.createElement('div');
+        liveNode.className='msg bot'; liveNode.id='live'+Date.now();
+        document.getElementById('chat').appendChild(liveNode); maybePin();
+      }
+      return liveNode;
+    };
+    for(;;){
+      const {done,value}=await reader.read();
+      if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      let k;
+      while((k=buf.indexOf('\n\n'))>=0){
+        const line=buf.slice(0,k).trim(); buf=buf.slice(k+2);
+        if(!line.startsWith('data:'))continue;
+        let e; try{ e=JSON.parse(line.slice(5)); }catch(_){ continue; }
+        if(e.t){
+          const n=ensureLive();
+          if(n.dataset.st){ n.textContent=''; delete n.dataset.st; }
+          n.textContent=(n.textContent||'')+e.t; full+=e.t; maybePin();
+        }
+        else if(e.status){ const n=ensureLive(); n.dataset.st='1'; n.innerHTML='<small style="opacity:.6">'+escapeHtml(e.status)+'</small>'; }
+        else if(e.error){ streamErr=e.error; }
+        else if(e.done){ gotDone=true; learned=e.learned||null; full=e.reply||full; }
+      }
+    }
+    clearStaged();
+    document.getElementById('typing')?.remove();
+    if(streamErr||!gotDone){ throw new Error(streamErr||'stream cut off'); }
+    lastReply=(full||'').replaceAll('///',' ');
     await loadHistory();
     loadNudges();
-    if(j2.learned){ bubble('l'+Date.now(),'bot','✓ '+j2.learned); }
+    if(learned){ bubble('l'+Date.now(),'bot','✓ '+learned); }
     done();
   }catch(e){ document.getElementById('typing')?.remove(); optNode.remove(); document.getElementById('in').value=draft; if(e.message!=='locked') bubble('e'+Date.now(),'bot','Note: Send failed (connection?). Your message is back in the box — hit Send to retry.'); done(); }
 }
 async function editMsg(id, old, who){
   const v=prompt('Edit message:', old); if(v===null||v===old)return;
-  let regen=false;
-  if(who==='me') regen=confirm('Get a fresh reply to the edited message? (OK = yes, Cancel = just fix the text)');
+  // editing your message always regenerates his reply; his messages have no buttons
+  const regen=(who==='me');
   try{
     let r;
     if(regen){
+      const node0=document.getElementById('m-'+id);
+      if(node0){ const tp=document.createElement('div'); tp.className='msg bot typing'; tp.id='typing'; tp.innerHTML='<i>●</i> <i>●</i> <i>●</i>'; node0.after(tp); }
+      r=await api('/api/message/'+id,{method:'PUT',body:JSON.stringify({content:v,regenerate:true})});
+    } else {
       const node0=document.getElementById('m-'+id);
       if(node0){ const tp=document.createElement('div'); tp.className='msg bot typing'; tp.id='typing'; tp.innerHTML='<i>●</i> <i>●</i> <i>●</i>'; node0.after(tp); }
       r=await api('/api/message/'+id,{method:'PUT',body:JSON.stringify({content:v,regenerate:true})});

@@ -4,10 +4,14 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 import urllib.request as _urlreq
 from fastapi import FastAPI, UploadFile, File, Request
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from openai import OpenAI
+try:
+    from openai import Stream as _OpenAIStream
+except Exception:
+    _OpenAIStream = None
 
 BASE = Path(__file__).parent
 DATA_DIR = Path(os.getenv("DATA_DIR", "")) or BASE
@@ -791,6 +795,84 @@ Rules:
 5. Never use emojis anywhere in replies — plain refined text only.{rules_text}{disabled_text}"""
     return system, profile, lim, tools_now
 
+class _TurnError(Exception):
+    def __init__(self, resp):
+        self.resp = resp
+
+def prepare_turn(inp, m, client):
+    """Learn + save the user message FIRST + build context.
+    Returns (msgs, learned, tools_now). Raises _TurnError to abort."""
+    profile = m.get("profile", {})
+    system, _, lim, tools_now = build_system(m)
+    # auto-learn simple facts: "my name is X", "my goal is Y"
+    msg_low = inp.message.lower()
+    learned = None
+    nm = extract_name(inp.message)
+    if nm:
+        profile["name"] = nm
+        learned = f"Saved name: {nm}"
+    loc = extract_location(inp.message)
+    if loc:
+        profile["location"] = loc
+        learned = (learned + " " if learned else "") + f"Saved location: {loc}."
+    for cert in extract_certs(inp.message):
+        ctext = f"Has {cert}"
+        if not any(f.get("text") == ctext for f in m.get("facts", [])):
+            m.setdefault("facts", []).append({"type": "auto", "at": datetime.now().isoformat(), "text": ctext})
+            learned = (learned + " " if learned else "") + f"Noted: {cert}."
+    if "my goal is " in msg_low or "my goals are " in msg_low:
+        g = inp.message.strip()[:300]
+        if g not in profile.get("goals", []):
+            profile.setdefault("goals", []).append(g)
+            learned = "Saved to goals."
+
+    # "remind me ..." → deterministic reminder, no AI needed
+    if "remind me" in msg_low and lim.get("reminders"):
+        task, due, repeat = parse_reminder(inp.message)
+        if task and due:
+            m.setdefault("reminders", []).append({"id": uuid.uuid4().hex[:8], "text": task,
+                                                  "due": due.isoformat(), "repeat": repeat,
+                                                  "done": False, "at": datetime.now().isoformat()})
+            learned = (learned + " " if learned else "") + \
+                f"Reminder set — I'll check on you: {task} ({due.strftime('%a %H:%M')})."
+        elif not learned:
+            learned = "When should I check on you? (e.g. at 8pm, tomorrow 9am, in 30 min, friday)"
+
+    # SAVE THE USER'S MESSAGE FIRST — before the brain even runs — so a failed
+    # reply, refresh or closed tab can never lose what they wrote.
+    m.setdefault("conversations", []).append({"id": uuid.uuid4().hex[:8], "role": "user",
+                                              "content": inp.message[:2000], "at": datetime.now().isoformat()})
+    m["profile"] = profile
+    if learned and learned not in [f.get("text", "") for f in m["facts"][-5:]]:
+        m["facts"].append({"type": "auto", "at": datetime.now().isoformat(), "text": inp.message[:500]})
+    save_mem(m)
+
+    NO_VISION = ("llama-3.3-70b-versatile", "llama3.1", "openai/gpt-oss-120b", "openai/gpt-oss-20b")
+    if inp.image_b64 and MODEL in NO_VISION:
+        raise _TurnError(JSONResponse({"error": "This brain cannot see images. For photo questions, switch to Gemini or GPT in Brain settings, then ask again."}, status_code=400))
+
+    msgs = [{"role": "system", "content": system}]
+    msgs.extend(budgeted_history(m))
+    if inp.image_b64:
+        msgs.append({"role": "user", "content": [
+            {"type": "text", "text": inp.message or "What do you see?"},
+            {"type": "image_url", "image_url": {"url": inp.image_b64}}
+        ]})
+    else:
+        msgs.append({"role": "user", "content": inp.message})
+    return msgs, learned, tools_now
+
+def persist_reply(m, reply):
+    m["conversations"].append({"id": uuid.uuid4().hex[:8], "role": "assistant",
+                               "content": (reply or "")[:4000], "at": datetime.now().isoformat()})
+    m["profile"] = m.get("profile", {})
+    global _pending_insights
+    for t in _pending_insights:
+        m.setdefault("insights", []).append({"id": uuid.uuid4().hex[:8], "text": t,
+                                              "at": datetime.now().isoformat(), "seen": False})
+    _pending_insights = []
+    save_mem(m)
+
 @app.post("/api/chat")
 def chat(inp: ChatIn, req: Request):
     if not need_auth(req):
@@ -887,6 +969,110 @@ def chat(inp: ChatIn, req: Request):
     _pending_insights = []
     save_mem(m)
     return {"reply": reply, "learned": learned}
+
+@app.post("/api/chat/stream")
+def chat_stream(inp: ChatIn, req: Request):
+    if not need_auth(req):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    m = load_mem()
+    client = get_client()
+    if not client:
+        return JSONResponse({"error": "no API key saved"}, status_code=400)
+    try:
+        msgs, learned, tools_now = prepare_turn(inp, m, client)
+    except _TurnError as te:
+        return te.resp
+
+    STATUS = {"web_search": "Searching the web...", "browse_page": "Opening that page...",
+              "get_datetime": "Checking the time...", "save_insight": "Noting that down...",
+              "pc_open": "Opening that...", "pc_run": "Preparing that command...",
+              "pc_file": "Looking at files...", "pc_screenshot": "Taking a screenshot...",
+              "chrome_tabs": "Checking your tabs...", "chrome_go": "Opening that...",
+              "chrome_read": "Reading that page..."}
+
+    STATUS = {"web_search": "Searching the web...", "browse_page": "Opening that page...",
+              "get_datetime": "Checking the time...", "save_insight": "Noting that down...",
+              "pc_open": "Opening that...", "pc_run": "Preparing that command...",
+              "pc_file": "Looking at files...", "pc_screenshot": "Taking a screenshot...",
+              "chrome_tabs": "Checking your tabs...", "chrome_go": "Opening that...",
+              "chrome_read": "Reading that page..."}
+
+    def gen():
+        full = ""
+
+        def emit_text(t):
+            yield ("t", t)
+
+        def run_round(cur):
+            """One model round: streams tokens when the provider honors stream,
+            otherwise handles a full object (some providers ignore stream with tools)."""
+            kw = {"tools": tools_now, "tool_choice": "auto"} if tools_now else {}
+            resp = client.chat.completions.create(model=MODEL, messages=cur,
+                                                  max_tokens=800, **kw)
+            if _OpenAIStream is not None and isinstance(resp, _OpenAIStream):
+                parts, tcalls = [], {}
+                for chunk in resp:
+                    d = chunk.choices[0].delta
+                    if getattr(d, "content", None):
+                        parts.append(d.content)
+                        yield ("t", d.content)
+                    for tc in (getattr(d, "tool_calls", None) or []):
+                        e = tcalls.setdefault(getattr(tc, "index", 0),
+                                              {"id": "", "name": "", "args": ""})
+                        if getattr(tc, "id", None):
+                            e["id"] = tc.id
+                        fn = getattr(tc, "function", None)
+                        if fn:
+                            if getattr(fn, "name", None):
+                                e["name"] = fn.name
+                            if getattr(fn, "arguments", None):
+                                e["args"] += fn.arguments
+                return "".join(parts), [v for v in tcalls.values() if v.get("id") or v.get("name")]
+            msg = resp.choices[0].message
+            text = getattr(msg, "content", None) or ""
+            if text:
+                yield ("t", text)
+            tcs = []
+            for tc in (getattr(msg, "tool_calls", None) or []):
+                tcs.append({"id": tc.id, "name": tc.function.name,
+                            "args": tc.function.arguments or ""})
+            return text, tcs
+
+        try:
+            cur = msgs
+            for _ in range(3):
+                text, tcalls = "", []
+                for kind, val in run_round(cur):
+                    text += val
+                    yield "data: " + json.dumps({"t": val}, ensure_ascii=False) + "\n\n"
+                full = text
+                if not tcalls:
+                    break
+                cur.append({"role": "assistant", "content": text,
+                            "tool_calls": [{"id": v["id"], "type": "function",
+                                            "function": {"name": v["name"],
+                                                         "arguments": v["args"]}}
+                                           for v in tcalls]})
+                for v in tcalls:
+                    yield "data: " + json.dumps(
+                        {"status": STATUS.get(v["name"], "Working...")}) + "\n\n"
+                    try:
+                        if v["name"] not in [t["function"]["name"] for t in tools_now]:
+                            res = json.dumps({"error": "that ability is disabled in user Rules"})
+                        else:
+                            res = TOOL_HANDLERS[v["name"]](json.loads(v["args"] or "{}"))
+                    except Exception as e:
+                        res = json.dumps({"error": str(e)[:300]})
+                    cur.append({"role": "tool", "tool_call_id": v["id"],
+                                "content": res if isinstance(res, str) else json.dumps(res)})
+            persist_reply(m, full)
+            yield "data: " + json.dumps({"done": True, "reply": (full or "")[:4000],
+                                         "learned": learned}, ensure_ascii=False) + "\n\n"
+        except Exception as e:
+            yield "data: " + json.dumps({"error": f"AI call failed: {e}"}) + "\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 class EditIn(BaseModel):
     content: str
