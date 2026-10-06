@@ -3,5 +3,5 @@ uvicorn
 python-multipart
 openai
 pydantic
-fpdf2
-pillow
+fpdf2==2.8.8
+pillow==12.3.0
