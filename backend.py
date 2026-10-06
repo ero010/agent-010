@@ -102,7 +102,7 @@ def merge_mem(disk, incoming):
     goals = [g for g in dict.fromkeys((dp.get("goals", []) or []) + (ip.get("goals", []) or []))
              if g not in tgoal]
     prof["goals"] = goals
-    prof["rules"] = ip.get("rules", "") or dp.get("rules", "")
+    prof["rules"] = ip.get("rules") if "rules" in ip else dp.get("rules", "")
     merged_limits = dict(dp.get("limits", {}) or {})
     merged_limits.update(ip.get("limits", {}) or {})
     prof["limits"] = merged_limits
@@ -1031,7 +1031,7 @@ def del_message(mid: str, req: Request, after: str = "reply"):
         return JSONResponse({"error": "message not found"}, status_code=404)
     gone = convs[idx]
     deleted = [mid]
-    if gone.get("role") == "user":
+    if gone.get("role") == "user" and after != "none":
         if after == "all":
             for c in convs[idx + 1:]:
                 if c.get("id"):
@@ -1244,6 +1244,15 @@ MODEL_CATALOG = [
     {"id": "openai", "label": "Pollinations — no key (unreliable)", "base_url": "https://text.pollinations.ai/openai",
      "env_key": "", "key_from": "",
      "features": ["No signup", "Tiny free allowance, stops with 402 errors", "Use only as last resort"]},
+    {"id": "mimo-v2.6-flash", "label": "MiMo V2.6 Flash (Xiaomi) — your balance", "base_url": "https://api.xiaomimimo.com/v1",
+     "env_key": "MIMO_API_KEY", "key_from": "https://platform.xiaomimimo.com/console/api-keys",
+     "features": ["Fast + cheap, sips your $1.56", "Large context window", "Tools + built-in web search"]},
+    {"id": "mimo-v2.6-pro", "label": "MiMo V2.6 Pro (Xiaomi) — smartest", "base_url": "https://api.xiaomimimo.com/v1",
+     "env_key": "MIMO_API_KEY", "key_from": "https://platform.xiaomimimo.com/console/api-keys",
+     "features": ["Flagship reasoning, full modality", "Huge context window", "Tools + built-in web search"]},
+    {"id": "mimo-v2.6-pro-ultraspeed", "label": "MiMo V2.6 Ultraspeed — fastest", "base_url": "https://api.xiaomimimo.com/v1",
+     "env_key": "MIMO_API_KEY", "key_from": "https://platform.xiaomimimo.com/console/api-keys",
+     "features": ["Fastest replies", "Large context window", "Tools + built-in web search"]},
     {"id": "openai/gpt-4o-mini", "label": "GPT-4o mini via GitHub — free", "base_url": "https://models.github.ai/inference",
      "env_key": "GITHUB_TOKEN", "key_from": "https://github.com/settings/tokens",
      "features": ["Free with any GitHub account", "Real GPT-4o mini + vision", "Rate-limited quotas"]},
@@ -1265,6 +1274,9 @@ _BRAIN_LIMITS = {
     "grok-4.7": "Paid: ~$2/1M words in, no daily cap",
     "llama3.1": "Unlimited — runs on your own PC",
     "openai": "Shared free pool — dies with 402 errors when drained (happened live), back later",
+    "mimo-v2.6-flash": "Pay-per-use from your $1.56 MiMo balance — flash sips it slowly",
+    "mimo-v2.6-pro": "Pay-per-use from your $1.56 MiMo balance — pro drinks faster",
+    "mimo-v2.6-pro-ultraspeed": "Pay-per-use from your $1.56 MiMo balance",
     "openai/gpt-4o-mini": "Free GitHub quotas — modest daily cap, resets daily",
     "meta-llama/llama-3.3-70b-instruct:free": "Free key — modest daily cap (dozens of chats)",
 }
