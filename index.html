@@ -125,13 +125,22 @@ function doLogin(){ const v=document.getElementById('pw').value; localStorage.se
 function logout(){ localStorage.removeItem('lm_pw'); location.reload(); }
 function fmtTime(at){ if(!at)return ''; try{ const d=new Date(at); return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}); }catch(e){ return ''; } }
 function richText(el, text){
-  String(text||'').split(/(https?:\/\/\S+|\/api\/file\/\S+)/g).forEach(p=>{
-    if(/^(https?:\/\/\S+|\/api\/file\/\S+)$/.test(p)){
-      const a=document.createElement('a'); a.href=p;
-      a.textContent=p.startsWith('/api/file')?'Download file':p;
+  String(text||'').split(/(\[[^\]]+\]\([^)]+\))/g).forEach(part=>{
+    const m=part.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
+    if(m){
+      const a=document.createElement('a'); a.href=m[2]; a.textContent=m[1];
       a.target='_blank'; a.rel='noopener'; a.style.color='#2f6bff'; a.style.fontWeight='600';
-      el.appendChild(a);
-    } else if(p){ el.appendChild(document.createTextNode(p)); }
+      el.appendChild(a); return;
+    }
+    part.split(/(https?:\/\/\S+|\/api\/file\/\S+)/g).forEach(p=>{
+      if(/^(https?:\/\/\S+|\/api\/file\/\S+)$/.test(p)){
+        const href=p.replace(/[)\].,;:'"]+$/,'');
+        const a=document.createElement('a'); a.href=href;
+        a.textContent=href.startsWith('/api/file')?'Download file':href;
+        a.target='_blank'; a.rel='noopener'; a.style.color='#2f6bff'; a.style.fontWeight='600';
+        el.appendChild(a);
+      } else if(p){ el.appendChild(document.createTextNode(p)); }
+    });
   });
 }
 function bubble(id, who, text, at){
