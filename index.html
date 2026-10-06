@@ -316,10 +316,6 @@ async function editMsg(id, old, who){
       if(node0){ const tp=document.createElement('div'); tp.className='msg bot typing'; tp.id='typing'; tp.innerHTML='<i>●</i> <i>●</i> <i>●</i>'; node0.after(tp); }
       r=await api('/api/message/'+id,{method:'PUT',body:JSON.stringify({content:v,regenerate:true})});
     } else {
-      const node0=document.getElementById('m-'+id);
-      if(node0){ const tp=document.createElement('div'); tp.className='msg bot typing'; tp.id='typing'; tp.innerHTML='<i>●</i> <i>●</i> <i>●</i>'; node0.after(tp); }
-      r=await api('/api/message/'+id,{method:'PUT',body:JSON.stringify({content:v,regenerate:true})});
-    } else {
       const node=document.getElementById('m-'+id);
       if(node) node.firstChild.textContent=v;
       r=await api('/api/message/'+id,{method:'PUT',body:JSON.stringify({content:v})});
