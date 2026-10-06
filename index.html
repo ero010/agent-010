@@ -1,31 +1,46 @@
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>010</title>
+<title>Personal Guide</title>
 <style>
-body{font-family:system-ui;margin:0;background:#0f1115;color:#eee;display:flex;flex-direction:column;height:100vh}
-header{padding:12px 16px;background:#171a21;border-bottom:1px solid #222;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-#chat{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
-.msg{max-width:85%;padding:10px 12px;border-radius:12px;white-space:pre-wrap;position:relative}
-.me{align-self:flex-end;background:#2b6cff}.bot{align-self:flex-start;background:#1e222c}
-.tools{margin-top:6px;display:flex;gap:8px;font-size:12px;opacity:.6}
+*{box-sizing:border-box}
+body{font-family:"Segoe UI",system-ui,-apple-system,sans-serif;margin:0;min-height:100vh;display:flex;flex-direction:column;color:#101c30;background:linear-gradient(150deg,#ffffff 0%,#e9f1ff 32%,#f4eaff 62%,#e3f9ff 100%);background-attachment:fixed}
+header{padding:12px 18px;background:rgba(255,255,255,.72);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom:1px solid rgba(120,110,255,.25);box-shadow:0 4px 24px rgba(90,80,220,.12);display:flex;gap:8px;align-items:center;flex-wrap:wrap;position:sticky;top:0;z-index:10}
+header b{font-size:19px;letter-spacing:.5px;background:linear-gradient(90deg,#1a3fd4,#7b2ff7,#c89b3c);-webkit-background-clip:text;background-clip:text;color:transparent}
+#chat{flex:1;overflow:auto;padding:20px 16px 8px;display:flex;flex-direction:column;gap:12px;max-width:900px;width:100%;margin:0 auto}
+.msg{max-width:85%;padding:12px 16px;border-radius:18px;white-space:pre-wrap;position:relative;line-height:1.5;box-shadow:0 6px 20px rgba(60,60,180,.10);animation:rise .25s ease}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.me{align-self:flex-end;background:linear-gradient(135deg,#2f6bff,#00c2d8);color:#fff;border-bottom-right-radius:6px}
+.bot{align-self:flex-start;background:rgba(255,255,255,.85);backdrop-filter:blur(8px);border:1px solid rgba(130,120,255,.25);border-bottom-left-radius:6px}
+.tools{margin-top:6px;display:flex;gap:10px;font-size:12px;opacity:.55}
 .tools span{cursor:pointer}.tools span:hover{opacity:1}
-.when{font-size:10px;opacity:.45;margin-top:4px}
+.when{font-size:10px;opacity:.5;margin-top:4px}
 .typing i{display:inline-block;animation:blink 1s infinite}.typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
 @keyframes blink{0%,100%{opacity:.2}50%{opacity:1}}
-#bar{display:flex;gap:8px;padding:12px;background:#171a21}
-input,button{padding:10px;border-radius:8px;border:1px solid #333;background:#0f1115;color:#eee}
-#in{flex:1}button{cursor:pointer}
-small{color:#888}
-#login{position:fixed;inset:0;background:#0f1115;display:flex;align-items:center;justify-content:center;z-index:99}
-#login div{background:#171a21;padding:24px;border-radius:12px;display:flex;flex-direction:column;gap:10px;min-width:280px}
+#bar{display:flex;gap:8px;padding:12px 16px;max-width:900px;width:100%;margin:0 auto}
+#in{flex:1;padding:13px 18px;border-radius:999px;border:1px solid rgba(120,110,255,.35);background:rgba(255,255,255,.9);color:#101c30;box-shadow:0 4px 16px rgba(90,80,220,.12);outline:none}
+#in:focus{border-color:#7b2ff7;box-shadow:0 0 0 3px rgba(123,47,247,.15)}
+button{padding:10px 16px;border-radius:999px;border:1px solid rgba(120,110,255,.3);background:rgba(255,255,255,.85);color:#1a2b4a;cursor:pointer;box-shadow:0 3px 10px rgba(90,80,220,.10);transition:transform .12s,box-shadow .12s}
+button:hover{transform:translateY(-1px);box-shadow:0 6px 16px rgba(90,80,220,.20)}
+#bar>button{background:linear-gradient(135deg,#2f6bff,#7b2ff7);color:#fff;border:none}
+small{color:#5b6b86}
+#login{position:fixed;inset:0;background:linear-gradient(150deg,#dfe9ff,#f0e6ff);display:flex;align-items:center;justify-content:center;z-index:99}
+#login div{background:rgba(255,255,255,.85);backdrop-filter:blur(16px);padding:32px;border-radius:22px;display:flex;flex-direction:column;gap:12px;min-width:300px;box-shadow:0 20px 60px rgba(90,80,220,.25);border:1px solid rgba(255,255,255,.9);text-align:center}
+#login b{font-size:24px;background:linear-gradient(90deg,#1a3fd4,#7b2ff7,#c89b3c);-webkit-background-clip:text;background-clip:text;color:transparent}
+#login input{padding:12px 16px;border-radius:12px;border:1px solid rgba(120,110,255,.35);color:#101c30}
+#login button{background:linear-gradient(135deg,#2f6bff,#7b2ff7);color:#fff;border:none;font-size:15px}
+#settings>div{background:#fff !important;color:#101c30 !important;box-shadow:0 20px 60px rgba(90,80,220,.25)}
+#settings input,#settings select{background:#f2f5ff !important;color:#101c30 !important;border:1px solid rgba(120,110,255,.3) !important}
+#settings small{color:#5b6b86 !important}
+#nudges,#pc,#stage{max-width:900px;width:100%;margin:0 auto}
+input[type=file]{font-size:12px}
 </style></head><body>
 <div id="login" style="display:none"><div>
-<b>⚡ 010</b><small>Enter password</small>
+<b>✨ Personal Guide</b><small>Enter password</small>
 <input id="pw" type="password" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin()">
 <button onclick="doLogin()">Unlock</button>
 <small id="loginerr" style="color:#f66"></small>
 </div></div>
-<header><b>⚡ 010</b><small id="status">life manager</small><small id="model"></small>
+<header><b>✨ Personal Guide</b><small id="status">life manager</small><small id="model"></small>
 <span style="flex:1"></span>
 <button onclick="saveProfile()">Save profile</button>
 <button onclick="toggleVoice()">🎤 Voice</button>
@@ -47,7 +62,7 @@ small{color:#888}
 <div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="saveSettings()">Save</button><button onclick="testSettings()">Test</button><button onclick="closeSettings()">Close</button></div>
 <small id="setmsg"></small>
 <hr style="border-color:#333;width:100%">
-<small><b>Move 010 to another device / cloud:</b></small>
+<small><b>Move Personal Guide to another device / cloud:</b></small>
 <div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="exportMem()">⬇️ Export memory</button><button onclick="document.getElementById('impfile').click()">⬆️ Import memory</button>
 <input type="file" id="impfile" accept=".json" style="display:none" onchange="importMem()"></div>
 </div></div>
@@ -55,7 +70,7 @@ small{color:#888}
 <div id="nudges" style="display:none;flex-direction:column;gap:8px;padding:8px 12px;background:#171a21;border-top:1px solid #222"></div>
 <div id="pc" style="display:none;flex-direction:column;gap:8px;padding:8px 12px;background:#171a21;border-top:1px solid #444"></div>
 <div id="stage" style="display:none;gap:8px;padding:8px 12px;background:#171a21;border-top:1px solid #222;align-items:center"><span id="stagename"></span><button onclick="clearStaged()">✕</button></div>
-<div id="bar"><input id="in" placeholder="Talk to 010..." onkeydown="if(event.key==='Enter')send()">
+<div id="bar"><input id="in" placeholder="Ask your Personal Guide..." onkeydown="if(event.key==='Enter')send()">
 <button onclick="send()">Send</button>
 <button onclick="speakLast()">🔊 Speak</button></div>
 <video id="cam" style="display:none" autoplay playsinline width="320"></video>
@@ -92,7 +107,7 @@ async function loadHistory(){
     allMsgs=j.conversations||[];
     document.getElementById('chat').innerHTML='';
     if(!allMsgs.length){
-      bubble('welcome','bot',"Yo, I'm 010. I remember everything you tell me. Give me your name + your #1 goal + what's blocking you.");
+      bubble('welcome','bot',"Yo, I'm Personal Guide. I remember everything you tell me. Give me your name + your #1 goal + what's blocking you.");
       return;
     }
     renderMsgs(50);
@@ -100,7 +115,7 @@ async function loadHistory(){
   }catch(e){ if(e.message!=='locked') bubble('err','bot','⚠️ Cannot load: '+e.message); }
 }
 function addBot(text, at){
-  // 010 double-texts: /// splits one reply into consecutive bubbles
+  // Personal Guide double-texts: /// splits one reply into consecutive bubbles
   String(text||'').split('///').map(s=>s.trim()).filter(Boolean)
     .forEach((p,i)=>bubble('b'+Date.now()+i,'bot',p,at));
 }
@@ -250,7 +265,7 @@ async function loadPc(){
       const what=p.action==='open'?'🖥️ Open <b>'+escapeHtml(p.target)+'</b>'
         :p.action==='run'?'⌨️ Run <b>'+escapeHtml((p.command||'').slice(0,200))+'</b>'
         :'📝 Write <b>'+escapeHtml(p.path||'')+'</b>';
-      d.innerHTML=what+'<br><small>010 wants to do this on your laptop:</small><br>';
+      d.innerHTML=what+'<br><small>Personal Guide wants to do this on your laptop:</small><br>';
       d.appendChild(nbtn('✅ Approve',()=>pcDecide(p.id,true,what)));
       d.appendChild(nbtn('❌ Deny',()=>pcDecide(p.id,false,what)));
       box.appendChild(d);
@@ -271,7 +286,7 @@ async function pcDecide(id, ok, what){
 }
 async function exportMem(){
   const r=await api('/api/export'); const b=await r.blob();
-  const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='010-memory.json'; a.click();
+  const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='personal-guide-memory.json'; a.click();
   document.getElementById('setmsg').textContent='✅ Memory downloaded. Import it on the new device.';
 }
 async function importMem(){

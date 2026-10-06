@@ -343,7 +343,13 @@ def chrome_ctx():
     return p, browser
 
 def chrome_pages(browser):
-    return [pg for pg in browser.contexts[0].pages if not pg.url.startswith("chrome")] if browser.contexts else []
+    out = []
+    for ctx in browser.contexts:
+        out.extend([pg for pg in ctx.pages if not pg.url.startswith("chrome")])
+    return out
+
+def chrome_new_page(browser):
+    return browser.contexts[0].new_page() if browser.contexts else None
 
 def tool_chrome_tabs(args: dict):
     g = pc_guard("chrome", "")
@@ -372,7 +378,9 @@ def tool_chrome_go(args: dict):
         p, browser = chrome_ctx()
         try:
             pages = chrome_pages(browser)
-            pg = pages[0] if pages else browser.contexts[0].new_page()
+            pg = pages[0] if pages else chrome_new_page(browser)
+            if pg is None:
+                return json.dumps({"error": "no Chrome window open"})
             pg.goto(url, timeout=25000, wait_until="domcontentloaded")
             return json.dumps({"ok": True, "title": pg.title()[:200], "url": pg.url[:300]})
         finally:
@@ -606,13 +614,14 @@ def chat(inp: ChatIn, req: Request):
     if fresh:
         nudge_text += "\nTHINGS YOU SAVED TO TELL THEM (share naturally when relevant): " + "; ".join(
             x["text"] for x in fresh[-3:])
-    system = f"""You are 010, a sharp friend who manages the user's life over text. Reply in ONE short message (1-3 sentences), contractions, no essays and no bullet lists unless asked. Only use /// to split into two texts on rare occasions when there are genuinely two separate thoughts.
-Your name is 010. Current local time: {now.strftime("%Y-%m-%d %H:%M (%A)")}.
+    system = f"""You are Personal Guide, a sharp friend who manages the user's life over text. Reply in ONE short message (1-3 sentences), contractions, no essays and no bullet lists unless asked. Only use /// to split into two texts on rare occasions when there are genuinely two separate thoughts.
+Your name is Personal Guide. When asked who you are, say you are Personal Guide, their personal guide.
+Current local time: {now.strftime("%Y-%m-%d %H:%M (%A)")}.
 Help user fix their life and achieve goals. Be present: if something is due, check on them directly ("gym time — you locked in?").
 Below you get the FULL conversation history plus MEMORY. Read the user's new message,
 then read ALL past messages for context, then answer using everything you know.
 You have live tools: web_search (current facts), browse_page (open links in Chrome), get_datetime (exact time) and save_insight (stash an interesting find to tell them later). Use them instead of guessing.
-{"PC: you can act on the user's laptop with pc_open, pc_file and pc_screenshot (instant), pc_run and outside writes (need their Approve tap — always tell them to tap it). When they ask you to open/run/do something, CALL the tool immediately instead of asking for confirmation — approval happens via their Approve button. Paths: use %USERPROFILE% for home (e.g. %USERPROFILE%/Documents). chrome_tabs/chrome_go/chrome_read work inside THEIR real logged-in Chrome (needs ChromeDebug.bat running) — use them for YouTube, Facebook messages, Gmail." if LOCAL_PC else ""}
+{"PC: you can act on the user's laptop with pc_open, pc_file and pc_screenshot (instant), pc_run and outside writes (need their Approve tap — always tell them to tap it). When they ask you to open/run/do something, CALL the tool immediately instead of asking for confirmation — approval happens via their Approve button. Paths: use %USERPROFILE% for home (e.g. %USERPROFILE%/Documents). chrome_tabs/chrome_go/chrome_read work inside THEIR real logged-in Chrome (needs ChromeDebug.bat running) — use them for YouTube, Facebook messages, Gmail." if LOCAL_PC else "IMPORTANT: you are the CLOUD copy — you cannot touch the laptop (no PC tools, no logged-in Chrome). If they ask to open/control anything on the laptop, tell them to use the laptop version (localhost:8000 with START.bat running)."}
 MEMORY: {mem_text}{nudge_text}
 Rules:
 1. If user shares a durable fact (name, goal, habit, preference), acknowledge it briefly and it will be auto-saved.
@@ -627,6 +636,15 @@ Rules:
     if nm:
         profile["name"] = nm
         learned = f"Saved name: {nm}"
+    loc = extract_location(inp.message)
+    if loc:
+        profile["location"] = loc
+        learned = (learned + " " if learned else "") + f"Saved location: {loc}."
+    for cert in extract_certs(inp.message):
+        ctext = f"Has {cert}"
+        if not any(f.get("text") == ctext for f in m.get("facts", [])):
+            m.setdefault("facts", []).append({"type": "auto", "at": datetime.now().isoformat(), "text": ctext})
+            learned = (learned + " " if learned else "") + f"Noted: {cert}."
     if "my goal is " in msg_low or "my goals are " in msg_low:
         g = inp.message.strip()[:300]
         if g not in profile.get("goals", []):
@@ -703,6 +721,20 @@ def extract_name(text: str):
         return " ".join(text[idx:].strip().split()[0:2]).strip(",. ")
     return ""
 
+def extract_location(text: str):
+    m = _re.search(r"(?:i live in|i'm from|i am from|my city is|i'm in|based in)\s+([A-Za-z][\w\- ]*?)(?=\s+(?:and|with|but|because|since|for|as|which|that)\b|[,.]|$)",
+                   text, flags=_re.I)
+    if m:
+        return m.group(1).strip(" .,").title()
+    return ""
+
+def extract_certs(text: str):
+    found = []
+    for m in _re.finditer(r"(?:have|got|hold|earned?)\s+(?:an?|my)?\s*([\w\- ]{2,40}?certificat\w*)",
+                          text, flags=_re.I):
+        found.append(m.group(1).strip().title())
+    return found
+
 def cascade_delete(m, content: str):
     """Wipe every trace of a deleted message: auto-facts, goals, learned name."""
     profile = m.get("profile", {})
@@ -713,6 +745,11 @@ def cascade_delete(m, content: str):
     nm = extract_name(content)
     if nm and profile.get("name") == nm:
         profile["name"] = ""
+    loc = extract_location(content)
+    if loc and profile.get("location") == loc:
+        profile["location"] = ""
+    for cert in extract_certs(content):
+        m["facts"] = [f for f in m.get("facts", []) if f.get("text") != f"Has {cert}"]
 
 def cascade_edit(m, old: str, new: str):
     """Move every trace of an edited message to the new text."""
@@ -725,6 +762,9 @@ def cascade_edit(m, old: str, new: str):
     nm = extract_name(new)
     if nm:
         profile["name"] = nm
+    nl = extract_location(new)
+    if nl:
+        profile["location"] = nl
 
 @app.put("/api/message/{mid}")
 def edit_message(mid: str, inp: EditIn, req: Request):
@@ -758,7 +798,7 @@ def export_mem(req: Request):
     if not need_auth(req):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     m = ensure_ids(load_mem())
-    return FileResponse(MEM_FILE, filename="010-memory.json", media_type="application/json")
+    return FileResponse(MEM_FILE, filename="personal-guide-memory.json", media_type="application/json")
 
 @app.post("/api/import")
 async def import_mem(req: Request, file: UploadFile = File(...)):
@@ -767,9 +807,9 @@ async def import_mem(req: Request, file: UploadFile = File(...)):
     try:
         d = json.loads((await file.read()).decode("utf-8"))
     except Exception:
-        return JSONResponse({"error": "not a valid 010-memory.json file"}, status_code=400)
+        return JSONResponse({"error": "not a valid personal-guide-memory.json file"}, status_code=400)
     if not isinstance(d, dict) or "conversations" not in d:
-        return JSONResponse({"error": "not a valid 010-memory.json file"}, status_code=400)
+        return JSONResponse({"error": "not a valid personal-guide-memory.json file"}, status_code=400)
     m = {"profile": d.get("profile", {"name": "", "goals": [], "notes": ""}),
          "facts": d.get("facts", []), "conversations": d.get("conversations", [])}
     save_mem(m)
