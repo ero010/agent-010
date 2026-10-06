@@ -102,6 +102,10 @@ def merge_mem(disk, incoming):
     goals = [g for g in dict.fromkeys((dp.get("goals", []) or []) + (ip.get("goals", []) or []))
              if g not in tgoal]
     prof["goals"] = goals
+    prof["rules"] = ip.get("rules", "") or dp.get("rules", "")
+    merged_limits = dict(dp.get("limits", {}) or {})
+    merged_limits.update(ip.get("limits", {}) or {})
+    prof["limits"] = merged_limits
 
     old_tb = disk.get("_tombstones", {}) or {}
     new_tb = {"conv": list(dict.fromkeys(
@@ -206,6 +210,34 @@ def get_history(req: Request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     m = ensure_ids(load_mem())
     return {"conversations": m.get("conversations", []), "profile": m.get("profile", {}), "facts": m.get("facts", [])}
+
+@app.get("/api/rules")
+def get_rules(req: Request):
+    if not need_auth(req):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    m = load_mem()
+    return {"rules": m.get("profile", {}).get("rules", ""), "limits": get_limits(m),
+            "local_pc": LOCAL_PC}
+
+class RulesIn(BaseModel):
+    rules: str = ""
+    limits: dict = {}
+
+@app.post("/api/rules")
+def post_rules(inp: RulesIn, req: Request):
+    if not need_auth(req):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    m = load_mem()
+    profile = m.get("profile", {})
+    profile["rules"] = (inp.rules or "")[:2000]
+    cur = get_limits(m)
+    for k in LIMIT_KEYS:
+        if k in (inp.limits or {}):
+            cur[k] = bool(inp.limits[k])
+    profile["limits"] = cur
+    m["profile"] = profile
+    save_mem(m)
+    return {"ok": True, "rules": profile["rules"], "limits": cur}
 
 @app.post("/api/profile")
 def save_profile(p: dict, req: Request):
@@ -649,11 +681,37 @@ def upcoming_reminders(m):
 def unseen_insights(m):
     return [x for x in m.get("insights", []) if not x.get("seen")]
 
-def complete_with_tools(client, model, msgs):
+LIMIT_KEYS = ("web_search", "browse_page", "pc", "insights", "reminders")
+
+def get_limits(m):
+    lim = {"web_search": True, "browse_page": True, "pc": True,
+           "insights": True, "reminders": True}
+    lim.update(m.get("profile", {}).get("limits", {}) or {})
+    return lim
+
+def allowed_tools(m):
+    lim = get_limits(m)
+    out = []
+    for t in TOOLS:
+        n = t["function"]["name"]
+        if n == "web_search" and not lim["web_search"]:
+            continue
+        if n == "browse_page" and not lim["browse_page"]:
+            continue
+        if n == "save_insight" and not lim["insights"]:
+            continue
+        if n.startswith(("pc_", "chrome_")) and not (LOCAL_PC and lim["pc"]):
+            continue
+        out.append(t)
+    return out
+
+def complete_with_tools(client, model, msgs, tools=None):
     """Run the chat with tool use (up to 3 rounds). Falls back to plain chat if tools unsupported."""
+    tools = tools if tools is not None else TOOLS
     try:
         resp = client.chat.completions.create(model=model, messages=msgs, max_tokens=800,
-                                              tools=TOOLS, tool_choice="auto")
+                                              tools=tools, tool_choice="auto") if tools else \
+            client.chat.completions.create(model=model, messages=msgs, max_tokens=800)
         for _ in range(3):
             msg = resp.choices[0].message
             calls = getattr(msg, "tool_calls", None)
@@ -665,12 +723,16 @@ def complete_with_tools(client, model, msgs):
                                                        "arguments": tc.function.arguments}} for tc in calls]})
             for tc in calls:
                 try:
-                    res = TOOL_HANDLERS[tc.function.name](json.loads(tc.function.arguments or "{}"))
+                    if tc.function.name not in [t["function"]["name"] for t in tools]:
+                        res = json.dumps({"error": "that ability is disabled in user Rules"})
+                    else:
+                        res = TOOL_HANDLERS[tc.function.name](json.loads(tc.function.arguments or "{}"))
                 except Exception as e:
                     res = json.dumps({"error": str(e)[:300]})
                 msgs.append({"role": "tool", "tool_call_id": tc.id, "content": res})
             resp = client.chat.completions.create(model=model, messages=msgs, max_tokens=800,
-                                                  tools=TOOLS, tool_choice="auto")
+                                                  tools=tools, tool_choice="auto") if tools else \
+                client.chat.completions.create(model=model, messages=msgs, max_tokens=800)
         return resp.choices[0].message.content
     except Exception as e:
         if "tool" in str(e).lower():
@@ -701,6 +763,12 @@ def chat(inp: ChatIn, req: Request):
     if fresh:
         nudge_text += "\nTHINGS YOU SAVED TO TELL THEM (share naturally when relevant): " + "; ".join(
             x["text"] for x in fresh[-3:])
+    lim = get_limits(m)
+    user_rules = (profile.get("rules") or "").strip()[:2000]
+    rules_text = f"\nUSER'S STANDING RULES (always obey, they override defaults): {user_rules}" if user_rules else ""
+    off = [k for k in LIMIT_KEYS if not lim.get(k)]
+    disabled_text = ("\nABILITIES TURNED OFF BY USER — never use or offer these: " + ", ".join(off)) if off else ""
+    tools_now = allowed_tools(m)
     system = f"""You are Personal Guide, a sharp friend who manages the user's life over text. Reply in ONE short message (1-3 sentences), contractions, no essays and no bullet lists unless asked. Only use /// to split into two texts on rare occasions when there are genuinely two separate thoughts.
 Your name is Personal Guide. When asked who you are, say you are Personal Guide, their personal guide.
 Current local time: {now.strftime("%Y-%m-%d %H:%M (%A)")}.
@@ -715,8 +783,7 @@ Rules:
 2. One concrete next action max, never lectures.
 3. One short question max when the goal is vague.
 4. ONE message by default. Detail only when asked.
-5. Never use emojis anywhere in replies — plain refined text only."""
-
+5. Never use emojis anywhere in replies — plain refined text only.{rules_text}{disabled_text}"""
     # auto-learn simple facts: "my name is X", "my goal is Y"
     msg_low = inp.message.lower()
     learned = None
@@ -740,7 +807,7 @@ Rules:
             learned = "Saved to goals."
 
     # "remind me ..." → deterministic reminder, no AI needed
-    if "remind me" in msg_low:
+    if "remind me" in msg_low and lim.get("reminders"):
         task, due, repeat = parse_reminder(inp.message)
         if task and due:
             m.setdefault("reminders", []).append({"id": uuid.uuid4().hex[:8], "text": task,
@@ -786,7 +853,7 @@ Rules:
         msgs.append({"role": "user", "content": inp.message})
 
     try:
-        reply = complete_with_tools(client, MODEL, msgs)
+        reply = complete_with_tools(client, MODEL, msgs, tools_now)
     except Exception as e:
         return JSONResponse({"error": f"AI call failed: {e}. Check AI_MODEL/BASE_URL/KEY."}, status_code=500)
 

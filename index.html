@@ -51,6 +51,7 @@ input[type=file]{display:none}
 <button onclick="toggleVoice()">◉ Voice</button>
 <button onclick="snap()">◎ Camera</button>
 <button onclick="openSettings()" title="Change brain: model + API key">Brain</button>
+<button onclick="openRules()" title="Personality, rules and limits">Rules</button>
 <button onclick="clearChat()" title="Delete all chat">✕ Clear</button>
 <button onclick="logout()" title="Lock">Lock</button>
 <label class="attach" for="f" title="Text files and images only">＋ Attach</label>
@@ -71,6 +72,16 @@ input[type=file]{display:none}
 <small><b>Move Personal Guide to another device / cloud:</b></small>
 <div style="display:flex;gap:8px;flex-wrap:wrap"><button onclick="exportMem()">Export memory</button><button onclick="document.getElementById('impfile').click()">Import memory</button>
 <input type="file" id="impfile" accept=".json" style="display:none" onchange="importMem()"></div>
+</div></div>
+<div id="rulesmodal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:98;align-items:center;justify-content:center">
+<div style="background:#fff;color:#101c30;padding:20px;border-radius:18px;display:flex;flex-direction:column;gap:10px;width:min(440px,92vw);max-height:88vh;overflow:auto;box-shadow:0 20px 60px rgba(90,80,220,.25)">
+<b>Rules for Personal Guide</b>
+<small style="color:#5b6b86">Personality + standing orders (how he talks, what to always do)</small>
+<textarea id="rulerules" rows="5" style="width:100%;border-radius:12px;border:1px solid rgba(120,110,255,.3);background:#f2f5ff;color:#101c30;padding:10px" placeholder="e.g. Be strict with me about gym. Always answer in French first. Never suggest call-center jobs."></textarea>
+<small style="color:#5b6b86"><b>Abilities on/off</b></small>
+<div id="rulelimits" style="display:flex;flex-direction:column;gap:6px;font-size:14px"></div>
+<div style="display:flex;gap:8px"><button onclick="saveRules()">Save</button><button onclick="closeRules()">Close</button></div>
+<small id="rulemsg" style="color:#5b6b86"></small>
 </div></div>
 <div id="chat"></div>
 <div id="nudges" style="display:none;flex-direction:column;gap:8px;padding:8px 12px;background:#171a21;border-top:1px solid #222"></div>
@@ -198,8 +209,14 @@ async function send(){
 }
 async function editMsg(id, old){
   const v=prompt('Edit message:', old); if(v===null||v===old)return;
-  await api('/api/message/'+id,{method:'PUT',body:JSON.stringify({content:v})});
-  loadHistory();
+  try{
+    const r=await api('/api/message/'+id,{method:'PUT',body:JSON.stringify({content:v})});
+    const j=await r.json();
+    if(j.error){ bubble('e'+Date.now(),'bot','Note: edit failed — '+j.error); return; }
+    const node=document.getElementById('m-'+id);
+    if(node) node.firstChild.textContent=v;
+    loadHistory();
+  }catch(e){ if(e.message!=='locked') bubble('e'+Date.now(),'bot','Note: edit failed (connection?). Try again.'); }
 }
 let CAT=[];
 async function refreshModelLabel(){ try{ const r=await api('/api/settings'); const j=await r.json(); document.getElementById('model').textContent=j.model; }catch(e){} }
@@ -240,6 +257,27 @@ async function testSettings(){
   const r=await api('/api/ping'); const j=await r.json();
   document.getElementById('setmsg').textContent=j.ok?('✓ '+j.model+' replied: '+j.reply):('Note: '+(j.error||'failed'));
 }
+const LIMDEF=[["web_search","Live web search"],["browse_page","Open pages in Chrome"],["pc","Laptop control (local only)"],["insights","Share finds unprompted"],["reminders","Reminders + check-ins"]];
+async function openRules(){
+  const r=await api('/api/rules'); const j=await r.json();
+  document.getElementById('rulerules').value=j.rules||'';
+  const box=document.getElementById('rulelimits'); box.innerHTML='';
+  LIMDEF.forEach(([k,label])=>{
+    const lab=document.createElement('label');
+    lab.innerHTML='<input type="checkbox" data-lim="'+k+'"'+(j.limits[k]?' checked':'')+'> '+label;
+    box.appendChild(lab);
+  });
+  if(!j.local_pc){ const s=document.createElement('small'); s.textContent='Laptop control only exists on the laptop version.'; box.appendChild(s); }
+  document.getElementById('rulemsg').textContent='';
+  document.getElementById('rulesmodal').style.display='flex';
+}
+async function saveRules(){
+  const lim={}; document.querySelectorAll('#rulelimits input[data-lim]').forEach(c=>lim[c.dataset.lim]=c.checked);
+  const r=await api('/api/rules',{method:'POST',body:JSON.stringify({rules:document.getElementById('rulerules').value,limits:lim})});
+  const j=await r.json();
+  document.getElementById('rulemsg').textContent=j.error?('Note: '+j.error):'Saved — he follows these from the next message.';
+}
+function closeRules(){ document.getElementById('rulesmodal').style.display='none'; }
 function closeSettings(){ document.getElementById('settings').style.display='none'; }
 async function loadNudges(){
   try{
@@ -316,7 +354,18 @@ async function importMem(){
   document.getElementById('impfile').value='';
   loadHistory();
 }
-async function delMsg(id){ if(!confirm('Delete this message?'))return; await api('/api/message/'+id,{method:'DELETE'}); loadHistory(); }
+async function delMsg(id){
+  if(!confirm('Delete this message?'))return;
+  const node=document.getElementById('m-'+id);
+  if(node) node.style.opacity='.35';
+  try{
+    const r=await api('/api/message/'+id,{method:'DELETE'});
+    const j=await r.json();
+    if(j.error){ if(node) node.style.opacity='1'; bubble('e'+Date.now(),'bot','Note: delete failed — '+j.error); return; }
+    if(node) node.remove();
+    allMsgs=allMsgs.filter(c=>c.id!==id);
+  }catch(e){ if(node) node.style.opacity='1'; if(e.message!=='locked') bubble('e'+Date.now(),'bot','Note: delete failed (connection?). Try again.'); }
+}
 async function clearChat(){ if(!confirm('Delete ALL chat history? Memory facts stay.'))return; await api('/api/clear',{method:'POST'}); loadHistory(); }
 async function saveProfile(){
   const name=prompt('Your name?'); const goals=prompt('Your #1 goal?');
