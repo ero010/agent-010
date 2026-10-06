@@ -11,8 +11,13 @@ header b{font-size:19px;letter-spacing:.5px;background:linear-gradient(90deg,#1a
 @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .me{align-self:flex-end;background:linear-gradient(135deg,#2f6bff,#00c2d8);color:#fff;border-bottom-right-radius:6px}
 .bot{align-self:flex-start;background:rgba(255,255,255,.85);backdrop-filter:blur(8px);border:1px solid rgba(130,120,255,.25);border-bottom-left-radius:6px}
-.tools{margin-top:6px;display:flex;gap:10px;font-size:12px;opacity:.55}
-.tools span{cursor:pointer}.tools span:hover{opacity:1}
+.tools{margin-top:8px;display:flex;gap:8px;font-size:12px}
+.tools span{cursor:pointer;padding:4px 12px;border-radius:999px;background:rgba(123,47,247,.08);border:1px solid rgba(123,47,247,.25);transition:background .12s}
+.tools span:hover{background:rgba(123,47,247,.18);opacity:1}
+.attach{display:inline-flex;align-items:center;gap:6px;padding:10px 16px;border-radius:999px;border:1px solid rgba(120,110,255,.3);background:rgba(255,255,255,.85);cursor:pointer;box-shadow:0 3px 10px rgba(90,80,220,.10);font-size:14px;white-space:nowrap;color:#1a2b4a}
+.attach:hover{transform:translateY(-1px);box-shadow:0 6px 16px rgba(90,80,220,.20)}
+#host{font-size:11px;padding:3px 10px;border-radius:999px;background:rgba(0,194,216,.12);border:1px solid rgba(0,194,216,.35);color:#0a6b7a}
+button:disabled{opacity:.5;cursor:wait;transform:none}
 .when{font-size:10px;opacity:.5;margin-top:4px}
 .typing i{display:inline-block;animation:blink 1s infinite}.typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
 @keyframes blink{0%,100%{opacity:.2}50%{opacity:1}}
@@ -32,7 +37,7 @@ small{color:#5b6b86}
 #settings input,#settings select{background:#f2f5ff !important;color:#101c30 !important;border:1px solid rgba(120,110,255,.3) !important}
 #settings small{color:#5b6b86 !important}
 #nudges,#pc,#stage{max-width:900px;width:100%;margin:0 auto}
-input[type=file]{font-size:12px}
+input[type=file]{display:none}
 </style></head><body>
 <div id="login" style="display:none"><div>
 <b>✨ Personal Guide</b><small>Enter password</small>
@@ -40,7 +45,7 @@ input[type=file]{font-size:12px}
 <button onclick="doLogin()">Unlock</button>
 <small id="loginerr" style="color:#f66"></small>
 </div></div>
-<header><b>✨ Personal Guide</b><small id="status">life manager</small><small id="model"></small>
+<header><b>✨ Personal Guide</b><small id="status">life manager</small><small id="model"></small><span id="host"></span>
 <span style="flex:1"></span>
 <button onclick="saveProfile()">Save profile</button>
 <button onclick="toggleVoice()">🎤 Voice</button>
@@ -48,7 +53,8 @@ input[type=file]{font-size:12px}
 <button onclick="openSettings()" title="Change brain: model + API key">⚙️ Brain</button>
 <button onclick="clearChat()" title="Delete all chat">🗑️ Clear</button>
 <button onclick="logout()" title="Lock">🔒 Lock</button>
-<input type="file" id="f" accept=".txt,.md,.csv,.json,.png,.jpg,.jpeg,.webp" onchange="stageFile()" title="Text files and images only"></header>
+<label class="attach" for="f" title="Text files and images only">📎 Attach</label>
+<input type="file" id="f" accept=".txt,.md,.csv,.json,.png,.jpg,.jpeg,.webp" onchange="stageFile()"></header>
 <div id="settings" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:98;align-items:center;justify-content:center">
 <div style="background:#171a21;padding:20px;border-radius:12px;display:flex;flex-direction:column;gap:10px;width:min(420px,92vw);max-height:88vh;overflow:auto">
 <b>⚙️ Brain settings</b>
@@ -71,7 +77,7 @@ input[type=file]{font-size:12px}
 <div id="pc" style="display:none;flex-direction:column;gap:8px;padding:8px 12px;background:#171a21;border-top:1px solid #444"></div>
 <div id="stage" style="display:none;gap:8px;padding:8px 12px;background:#171a21;border-top:1px solid #222;align-items:center"><span id="stagename"></span><button onclick="clearStaged()">✕</button></div>
 <div id="bar"><input id="in" placeholder="Ask your Personal Guide..." onkeydown="if(event.key==='Enter')send()">
-<button onclick="send()">Send</button>
+<button id="sendbtn" onclick="send()">Send</button>
 <button onclick="speakLast()">🔊 Speak</button></div>
 <video id="cam" style="display:none" autoplay playsinline width="320"></video>
 <canvas id="cv" style="display:none"></canvas>
@@ -98,7 +104,8 @@ function bubble(id, who, text, at){
   tools.children[1].onclick=()=>delMsg(id);
   d.appendChild(tools);
   document.getElementById('chat').appendChild(d);
-  d.scrollIntoView();
+  d.scrollIntoView({block:'nearest'});
+  return d;
 }
 let allMsgs=[];
 async function loadHistory(){
@@ -120,7 +127,9 @@ function addBot(text, at){
     .forEach((p,i)=>bubble('b'+Date.now()+i,'bot',p,at));
 }
 function renderMsgs(n){
-  const box=document.getElementById('chat'); box.innerHTML='';
+  const box=document.getElementById('chat');
+  const nearBottom=box.scrollHeight-box.scrollTop-box.clientHeight<160;
+  box.innerHTML='';
   const shown=allMsgs.slice(-n);
   if(allMsgs.length>n){
     const b=document.createElement('button'); b.textContent='Show older ('+(allMsgs.length-n)+' more)';
@@ -131,6 +140,7 @@ function renderMsgs(n){
     else { String(c.content||'').split('///').map(s=>s.trim()).filter(Boolean)
       .forEach(p=>bubble(c.id||Math.random(),'bot',p,c.at)); }
   });
+  if(nearBottom||n<=50) box.scrollTop=box.scrollHeight;
 }
 let staged=null; // {kind:'image',dataUrl,file?} or {kind:'file',file}
 function stageChip(t){ document.getElementById('stagename').textContent=t; document.getElementById('stage').style.display='flex'; }
@@ -145,12 +155,19 @@ async function stageFile(){
     rd.readAsDataURL(f);
   } else { staged={kind:'file',file:f}; stageChip('📎 '+f.name+' — write a message and Send'); }
 }
+let sending=false;
 async function send(){
+  if(sending)return;
   const t=document.getElementById('in').value.trim();
   if(!t&&!staged&&!img)return;
+  sending=true; document.getElementById('sendbtn').disabled=true;
   document.getElementById('in').value='';
+  const draft=t;
+  const mine=t||(staged?'📎 '+staged.file.name:'[image]');
+  const optNode=bubble('tmp'+Date.now(),'me',mine,new Date().toISOString());
   const tp=document.createElement('div'); tp.className='msg bot typing'; tp.id='typing'; tp.innerHTML='<i>●</i> <i>●</i> <i>●</i>';
-  document.getElementById('chat').appendChild(tp); tp.scrollIntoView();
+  document.getElementById('chat').appendChild(tp); tp.scrollIntoView({block:'nearest'});
+  const done=()=>{ sending=false; document.getElementById('sendbtn').disabled=false; };
   try{
     let msg=t, b64=img;
     if(staged&&staged.kind==='image'){
@@ -170,13 +187,14 @@ async function send(){
     const r2=await api('/api/chat',{method:'POST',body:JSON.stringify({message:msg,image_b64:b64})});
     const j2=await r2.json(); clearStaged();
     document.getElementById('typing').remove();
-    if(j2.error){ bubble('e'+Date.now(),'bot','⚠️ '+j2.error); return; }
+    if(j2.error){ optNode.remove(); document.getElementById('in').value=draft; bubble('e'+Date.now(),'bot','⚠️ '+j2.error+' — your message is back in the box, hit Send to retry.'); done(); return; }
     lastReply=(j2.reply||'').replaceAll('///',' ');
     addBot(j2.reply);
     await loadHistory();
     loadNudges();
     if(j2.learned){ bubble('l'+Date.now(),'bot','✅ '+j2.learned); }
-  }catch(e){ document.getElementById('typing')?.remove(); if(e.message!=='locked') alert('Send failed: '+e.message); }
+    done();
+  }catch(e){ document.getElementById('typing')?.remove(); optNode.remove(); document.getElementById('in').value=draft; if(e.message!=='locked') bubble('e'+Date.now(),'bot','⚠️ Send failed (connection?). Your message is back in the box — hit Send to retry.'); done(); }
 }
 async function editMsg(id, old){
   const v=prompt('Edit message:', old); if(v===null||v===old)return;
@@ -330,6 +348,7 @@ loadHistory();
 refreshModelLabel();
 loadNudges();
 loadPc();
+document.getElementById('host').textContent=location.host.includes('localhost')?'🏠 laptop':'☁️ cloud';
 setInterval(loadNudges, 60000);
 setInterval(loadPc, 5000);
 </script></body></html>

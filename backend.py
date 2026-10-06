@@ -56,17 +56,12 @@ def load_mem():
 def save_mem(m):
     MEM_FILE.write_text(json.dumps(m, indent=2, ensure_ascii=False), encoding="utf-8")
     if os.getenv("DATA_DIR", ""):
-        # cloud volume: sync in background so replies stay fast
-        import threading
-
-        def _commit():
-            try:
-                import modal
-                modal.Volume.from_name("agent010-data").commit()
-            except Exception:
-                pass
-
-        threading.Thread(target=_commit, daemon=True).start()
+        # cloud volume: commit NOW so no message is ever lost on container recycle
+        try:
+            import modal
+            modal.Volume.from_name("agent010-data").commit()
+        except Exception:
+            pass
 
 def ensure_ids(m):
     changed = False
