@@ -374,7 +374,7 @@ def tool_web_search(args: dict):
         ddg = _http_get_json("https://api.duckduckgo.com/?" + urlencode(
             {"q": q, "format": "json", "no_html": 1, "skip_disambig": 1}))
         if ddg.get("AbstractText"):
-            out["results"].append({"source": "DuckDuckGo", "text": ddg["AbstractText"][:1500],
+            out["results"].append({"source": "DuckDuckGo", "text": ddg["AbstractText"][:800],
                                    "url": ddg.get("AbstractURL", "")})
         if ddg.get("Answer"):
             out["results"].append({"source": "DuckDuckGo answer", "text": str(ddg["Answer"])[:500]})
@@ -389,7 +389,7 @@ def tool_web_search(args: dict):
                                    + quote(title.replace(" ", "_")))
                 if s.get("extract"):
                     out["results"].append({"source": "Wikipedia: " + title,
-                                           "text": s["extract"][:1500],
+                                           "text": s["extract"][:800],
                                            "url": s.get("content_urls", {}).get("desktop", {}).get("page", "")})
             except Exception:
                 pass
@@ -397,7 +397,7 @@ def tool_web_search(args: dict):
         out["wiki_error"] = str(e)[:200]
     if not out["results"]:
         out["note"] = "No live results found — say so honestly instead of guessing."
-    return json.dumps(out, ensure_ascii=False)[:6000]
+    return json.dumps(out, ensure_ascii=False)[:2500]
 
 def tool_browse(args: dict):
     url = (args.get("url") or "").strip()[:500]
@@ -412,7 +412,7 @@ def tool_browse(args: dict):
             pg = ctx.new_page()
             pg.goto(url, timeout=25000, wait_until="domcontentloaded")
             title = pg.title()
-            text = pg.inner_text("body")[:5000]
+            text = pg.inner_text("body")[:2500]
             ctx.close()
         if not text.strip():
             return json.dumps({"url": url, "title": title, "note": "page opened but no readable text found"})
@@ -861,7 +861,7 @@ def tool_chrome_read(args: dict):
             i = int(args.get("tab", 0))
             pg = pages[i] if 0 <= i < len(pages) else pages[0]
             return json.dumps({"title": pg.title()[:200], "url": pg.url[:300],
-                               "text": pg.inner_text("body")[:6000]}, ensure_ascii=False)
+                               "text": pg.inner_text("body")[:2500]}, ensure_ascii=False)
         finally:
             browser.close()
             p.stop()
@@ -1186,6 +1186,7 @@ Help user fix their life and achieve goals. Be present: if something is due, che
 Below you get the FULL conversation history plus MEMORY. Read the user's new message,
 then read ALL past messages for context, then answer using everything you know.
 You have live tools: web_search (current facts), browse_page (open links in Chrome), get_datetime (exact time), save_insight (stash an interesting find to tell them later), make_image (generate AI images), make_pdf (create designed multi-page PDFs/books) and edit_image (caption/resize saved images). Use them instead of guessing. When you create a file, ALWAYS include its file_url link in your reply so they can download it.
+When they ask you to MAKE something (image, PDF, document), call the creation tool FIRST with your best content — research the web only if you truly lack the facts.
 {"PC: you can act on the user's laptop with pc_open, pc_file and pc_screenshot (instant), pc_run and outside writes (need their Approve tap — always tell them to tap it). When they ask you to open/run/do something, CALL the tool immediately instead of asking for confirmation — approval happens via their Approve button. Paths: use %USERPROFILE% for home (e.g. %USERPROFILE%/Documents). chrome_tabs/chrome_go/chrome_read work inside THEIR real logged-in Chrome (needs ChromeDebug.bat running) — use them for YouTube, Facebook messages, Gmail." if LOCAL_PC else "IMPORTANT: you are the CLOUD copy — you cannot touch the laptop (no PC tools, no logged-in Chrome). If they ask to open/control anything on the laptop, tell them to use the laptop version (localhost:8000 with START.bat running)."}
 MEMORY: {mem_text}{nudge_text}
 Rules:
