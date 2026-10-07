@@ -1079,6 +1079,42 @@ def allowed_tools(m):
         out.append(t)
     return out
 
+def _file_links(results):
+    """Pull /api/file links out of tool results so files never go undelivered."""
+    urls = []
+    for r in results:
+        try:
+            d = json.loads(r) if isinstance(r, str) else r
+        except Exception:
+            continue
+        if not isinstance(d, dict):
+            continue
+        for k in ("file_url", "all_files", "design_url"):
+            v = d.get(k)
+            if v:
+                urls += [u.strip() for u in str(v).split(",") if u.strip().startswith("/")]
+    return list(dict.fromkeys(urls))
+
+def _ensure_reply(client, model, msgs, reply, results):
+    """A brain must never answer empty. Files made → link them. Else one plain retry."""
+    if (reply or "").strip():
+        return reply
+    urls = _file_links(results)
+    if urls:
+        lines = "\n".join(f"[Download file]({u})" for u in urls)
+        return "Done — here you go:\n" + lines
+    try:
+        r2 = client.chat.completions.create(
+            model=model,
+            messages=msgs + [{"role": "user",
+                              "content": "Reply now in one short message using the tool results above."}],
+            max_tokens=300)
+        if (r2.choices[0].message.content or "").strip():
+            return r2.choices[0].message.content
+    except Exception:
+        pass
+    return "I hit a snag putting that together — ask me again and I'll get it done."
+
 def complete_with_tools(client, model, msgs, tools=None):
     """Run the chat with tool use (up to 3 rounds). Falls back to plain chat if tools unsupported."""
     tools = tools if tools is not None else TOOLS
@@ -1086,11 +1122,12 @@ def complete_with_tools(client, model, msgs, tools=None):
         resp = client.chat.completions.create(model=model, messages=msgs, max_tokens=800,
                                               tools=tools, tool_choice="auto") if tools else \
             client.chat.completions.create(model=model, messages=msgs, max_tokens=800)
+        results = []
         for _ in range(3):
             msg = resp.choices[0].message
             calls = getattr(msg, "tool_calls", None)
             if not calls:
-                return msg.content
+                return _ensure_reply(client, model, msgs, msg.content, results)
             msgs.append({"role": "assistant", "content": msg.content or "",
                          "tool_calls": [{"id": tc.id, "type": "function",
                                           "function": {"name": tc.function.name,
@@ -1103,11 +1140,12 @@ def complete_with_tools(client, model, msgs, tools=None):
                         res = TOOL_HANDLERS[tc.function.name](json.loads(tc.function.arguments or "{}"))
                 except Exception as e:
                     res = json.dumps({"error": str(e)[:300]})
+                results.append(res if isinstance(res, str) else json.dumps(res))
                 msgs.append({"role": "tool", "tool_call_id": tc.id, "content": res})
             resp = client.chat.completions.create(model=model, messages=msgs, max_tokens=800,
                                                   tools=tools, tool_choice="auto") if tools else \
                 client.chat.completions.create(model=model, messages=msgs, max_tokens=800)
-        return resp.choices[0].message.content
+        return _ensure_reply(client, model, msgs, resp.choices[0].message.content, results)
     except Exception as e:
         if "tool" in str(e).lower():
             return client.chat.completions.create(model=model, messages=msgs,
@@ -1402,6 +1440,7 @@ def chat_stream(inp: ChatIn, req: Request):
 
         try:
             cur = msgs
+            file_hits = []
             for _ in range(3):
                 text, tcalls = "", []
                 for kind, val in run_round(cur):
@@ -1425,8 +1464,19 @@ def chat_stream(inp: ChatIn, req: Request):
                             res = TOOL_HANDLERS[v["name"]](json.loads(v["args"] or "{}"))
                     except Exception as e:
                         res = json.dumps({"error": str(e)[:300]})
-                    cur.append({"role": "tool", "tool_call_id": v["id"],
-                                "content": res if isinstance(res, str) else json.dumps(res)})
+                    res_s = res if isinstance(res, str) else json.dumps(res)
+                    try:
+                        dres = json.loads(res_s)
+                        for k in ("file_url", "all_files"):
+                            if dres.get(k):
+                                file_hits += [u.strip() for u in str(dres[k]).split(",") if u.strip().startswith("/")]
+                    except Exception:
+                        pass
+                    cur.append({"role": "tool", "tool_call_id": v["id"], "content": res_s})
+            if not (full or "").strip() and file_hits:
+                full = "Done — here you go:\n" + "\n".join(
+                    f"[Download file]({u})" for u in dict.fromkeys(file_hits))
+                yield "data: " + json.dumps({"t": full}, ensure_ascii=False) + "\n\n"
             persist_reply(m, full)
             yield "data: " + json.dumps({"done": True, "reply": (full or "")[:4000],
                                          "learned": learned}, ensure_ascii=False) + "\n\n"
