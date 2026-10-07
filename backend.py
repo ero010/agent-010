@@ -1133,6 +1133,7 @@ def complete_with_tools(client, model, msgs, tools=None):
                                           "function": {"name": tc.function.name,
                                                        "arguments": tc.function.arguments}} for tc in calls]})
             for tc in calls:
+                print(f"[TOOLS] call={tc.function.name} args={str(tc.function.arguments)[:200]}", flush=True)
                 try:
                     if tc.function.name not in [t["function"]["name"] for t in tools]:
                         res = json.dumps({"error": "that ability is disabled in user Rules"})
